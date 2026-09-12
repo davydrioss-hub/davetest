@@ -1,27 +1,46 @@
-# Validation — 2026-09-12
+# Validation — Night Shift 0.2
 
-Engine pinned to Godot 4.4.1 stable, official commit `49a5bc7b6`.
+Local verification uses the official Godot 4.4.1 Linux editor/exporter.
 
-## Executed
+- **80 core checks:** contract creation and duplicate acceptance, exclusive and
+  cooperative pickup, solo heavy trolley, cargo ownership conservation,
+  distance validation, doors, loading, straps, unloading, payouts, multi-stop
+  routing, fragile damage, deadlines, four seats, driver assignment, upgrades,
+  knockdown/respawn, world collision, shift reports, reliable deletion replay,
+  atomic saves, corruption recovery, malformed snapshot rejection, all four
+  timed events, and migration of a 0.1 world with carried cargo.
+- **62 network checks:** real ENet listen host plus seven client processes;
+  capacity and password rejection, authoritative movement, cargo races,
+  loading/straps/unloading, one-time company payment, a simultaneous upgrade
+  purchase, host-only shift changes, four vehicle occupants, passenger input,
+  reconnect with durable cargo/stats, duplicate identity rejection, host-only
+  saves, reload retaining upgrades and world identity, next-night cleanup,
+  optional empty password, oversized input rejection, abrupt host shutdown.
+- **Rendered interface:** main, identity, play, host, join, settings, gameplay,
+  contracts, map, company, cargo, loading, street destination and rain screens
+  were rendered and inspected using software OpenGL. A garage beam occluding
+  the camera was fixed after inspection. This is visual verification, not a
+  representative consumer GPU performance benchmark.
+- **Windows package:** exported using the matching official x86-64 release
+  template; executable PE header and accompanying PCK checked by the builder.
+  The CI workflow additionally runs the exported executable on `windows-latest`
+  headlessly and verifies the resulting company, orders, player and host save.
 
-- 35 core assertions passed: distance/ownership checks; single-winner pickup; atomic delivery reward and item consumption; repeated order rejection; inventory conservation; property purchase and employee income; vehicle occupancy/release; death and delayed respawn; door collision; delta reconstruction; checksummed atomic save, backup recovery and path validation; address parsing.
-- 34 network checks passed using independent Godot processes and real ENet/UDP sockets, with one host and seven clients. Covered full snapshots, late joining, player capacity, incorrect and empty passwords, movement replication, competing pickups, authoritative order validation, duplicate rewards, invented money commands, oversized movement, reconnect with persistent identity, inventory/money/stats recovery, duplicate identity rejection, host-only saves, save/reload, graceful shutdown and abrupt host termination.
-- Exported pack was launched with the matching Linux runtime in headless single-player mode.
-- Main menu, first-run identity, play, host, join, settings and gameplay were rendered with the Godot OpenGL Compatibility renderer. Host/join forms and gameplay HUD were visually inspected; HUD contrast was corrected.
-- Windows x64 `.exe` and `.pck` were generated from the official Windows release template. No Steam SDK or third-party networking plugin is present. Test scenes/scripts are excluded from the exported pack.
+Internet connectivity across two physical homes, arbitrary routers, and
+interactive play on a physical Windows GPU require a friends' playtest. There
+is no claim of measured minimum hardware requirements or photorealistic art.
+The playable map, vehicle handling, NPC patrol and business simulation are a
+small stylized first version.
 
-## Boundaries
+All game mutations execute on the host. Clients send sequenced, rate-limited
+intents; joins authenticate the local RSA identity using a one-use challenge.
+Initial snapshots and reliable revisioned state deltas share channel 0;
+movement is 20 Hz on channel 1, NPC presentation at 5 Hz on channel 2. NPCs far
+from players update positions less frequently. Inventory is replicated as
+changes, and cargo uses server ownership instead of distributed rigid bodies.
 
-The networking checks run on local loopback. They do not establish performance on separate physical PCs, real Wi-Fi, an ISP router, public internet/NAT or a virtual LAN. Native Windows execution and Windows firewall behavior have **not** been tested in this Linux workspace. The Windows executable is an actual exported PE binary, not a script or placeholder.
-
-The 3D yard is a networking prototype. Patrol/NPC behavior is basic; there is no complete police/combat system, large open world, advanced vehicle physics, host migration, internet relay or client prediction. Private play does not require any player account.
-
-## Reproduce
-
-```sh
-godot --headless --path . res://tests/core_tests.tscn
-python tests/network_tests.py /path/to/godot
-python tools/build_windows.py
-```
-
-See `tests/last_network_result.json` after a local test run for its ordered checks. Test identities and world saves are generated outside the project and are not distributed.
+Known upstream import diagnostic: Godot 4.4.1 prints `Parameter "t" is null`
+when creating GLTF/FBX scene thumbnails with the headless dummy renderer.
+The build script recognizes only the exact dummy texture diagnostic from
+https://github.com/godotengine/godot/issues/108994. Other engine errors still
+fail the build. Rendered assets were checked with actual OpenGL.

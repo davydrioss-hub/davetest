@@ -47,6 +47,14 @@ class Bot:
         p=self.path/'command.tmp'
         p.write_text(json.dumps({'id':self.serial,**kwargs}))
         p.replace(self.path/'command.json')
+        deadline=time.monotonic()+6
+        while time.monotonic()<deadline:
+            if self.proc.poll() is not None:return
+            try:
+                if self.state()['command_id']>=self.serial:return
+            except (FileNotFoundError,KeyError,json.JSONDecodeError):pass
+            time.sleep(.03)
+        raise AssertionError('Bot did not consume command: '+self.name)
     def action(self, action, target=''):
         self.command(actions=[{'action':action,'target':target}])
     def stop(self):
@@ -80,79 +88,123 @@ try:
     wait(lambda:player(host,a.id)['pos'][0]>start+1,'Movement intent changes server position')
     a.command(move=[0,0])
     wait(lambda:abs(player(b,a.id)['pos'][0]-player(host,a.id)['pos'][0])<.3,'Movement replicates to another client')
-    # Test-only host positioning isolates race/validation checks from navigation.
-    loc=world(host)['items']['parcel_01']['pos']
+    a.action('accept_order','d001_01')
+    wait(lambda:world(host)['orders']['d001_01']['status']=='active','Client accepts authoritative contract')
+    iid=world(host)['orders']['d001_01']['item']
+    loc=world(host)['items'][iid]['pos']
     host.command(teleport={a.id:loc,b.id:loc})
-    wait(lambda:abs(player(a)['pos'][0]-loc[0])<.8,'Reliable teleport reaches client')
-    a.action('pickup','parcel_01');b.action('pickup','parcel_01')
-    wait(lambda:world(host)['items']['parcel_01']['holder'] in [a.id,b.id],'Simultaneous pickup resolves on server')
-    holder=world(host)['items']['parcel_01']['holder']
+    wait(lambda:abs(player(a)['pos'][0]-loc[0])<.1 and abs(player(b)['pos'][0]-loc[0])<.1,'Both couriers synchronize at cargo')
+    a.action('pickup',iid);b.action('pickup',iid)
+    wait(lambda:world(host)['items'][iid]['holder'] in [a.id,b.id],'Simultaneous pickup resolves once')
+    holder=world(host)['items'][iid]['holder']
     winner=a if a.id==holder else b
     loser=b if winner is a else a
-    wait(lambda:sum('parcel_01' in p['inventory'] for p in world(host)['players'].values())==1,'No duplicate item after race')
-    wait(lambda:world(loser)['items']['parcel_01']['holder']==holder,'Pickup ownership replicates')
-    winner.action('complete_order','order_01')
-    wait(lambda:'Bring the parcel' in winner.state()['message'],'Remote order cannot complete at wrong location')
-    host.command(teleport={holder:[12,0,-6]})
-    wait(lambda:player(winner)['pos'][0]==12,'Dispatch position synchronized')
-    winner.action('complete_order','order_01')
-    wait(lambda:player(host,holder)['money']==550,'Server pays valid order once')
-    winner.action('complete_order','order_01')
-    wait(lambda:'already completed' in winner.state()['message'],'Repeated request rejected over network')
-    assert player(host,holder)['money']==550
+    wait(lambda:sum(iid in p['inventory'] for p in world(host)['players'].values())==1,'No duplicated cargo after race')
+    winner.action('complete_order','d001_01')
+    wait(lambda:'отмеченному адресу' in winner.state()['message'],'Delivery distance enforced remotely')
+    rear=[-34,0,25.9]
+    host.command(teleport={holder:rear})
+    wait(lambda:abs(player(winner)['pos'][0]+34)<.1,'Driver reaches rear door')
+    winner.action('cargo_door')
+    wait(lambda:world(host)['vehicles']['van_01']['door_open'],'Rear door opens for whole session')
+    winner.action('load')
+    wait(lambda:iid in world(host)['vehicles']['van_01']['cargo'] and iid not in player(host,holder)['inventory'],'Loading moves cargo without duplication')
+    winner.action('secure')
+    wait(lambda:world(loser)['items'][iid]['secured'],'Cargo straps replicate to observer')
+    loser.action('unload',iid)
+    wait(lambda:'задней двери' in loser.state()['message'],'Remote stealing from van rejected')
+    winner.action('unload',iid)
+    wait(lambda:iid in player(host,holder)['inventory'] and not world(host)['vehicles']['van_01']['cargo'],'Unloading conserves cargo on server')
+    host.command(teleport={holder:[-16,0,-8]})
+    wait(lambda:abs(player(winner)['pos'][0]+16)<.1,'Destination synchronizes')
+    winner.action('complete_order','d001_01')
+    wait(lambda:world(host)['economy']['company']['balance']==1000,'Company receives validated payment')
+    wait(lambda:world(loser)['orders']['d001_01']['status']=='completed','Delivery completion replicates')
+    winner.action('complete_order','d001_01')
+    wait(lambda:'активного заказа' in winner.state()['message'],'Repeat payment rejected')
+    assert world(host)['economy']['company']['balance']==1000
     winner.action('add_money','999999')
-    wait(lambda:'Unknown action' in winner.state()['message'],'Invented money RPC action rejected')
-    assert player(host,holder)['money']==550
-    # Keep an item through disconnect and save/load, in addition to money/stats.
-    loc=world(host)['items']['parcel_02']['pos']
+    wait(lambda:'Неизвестное действие' in winner.state()['message'],'Invented reward action rejected')
+    # Both clients buy the same upgrade; only one debit and one installation.
+    host.command(teleport={holder:[-43,0,16],loser.id:[-43,0,16]})
+    wait(lambda:abs(player(winner)['pos'][2]-16)<.1 and abs(player(loser)['pos'][2]-16)<.1,'Crew reaches upgrade terminal')
+    winner.action('upgrade','capacity');loser.action('upgrade','capacity')
+    wait(lambda:world(host)['vehicles']['van_01']['capacity']==10,'Capacity upgrade installs')
+    wait(lambda:world(winner)['economy']['company']['balance']==200 and world(loser)['economy']['company']['balance']==200,'Concurrent purchase debits company once')
+    loser.action('end_shift')
+    wait(lambda:'Only the host' in loser.state()['message'],'Client cannot end the shared shift')
+    # Four synchronized seats; passenger input cannot move the van.
+    driver=clients[2]
+    riders=clients[2:6]
+    host.command(teleport={c.id:[-34,0,29] for c in riders+[clients[6]]})
+    wait(lambda:all(abs(player(c)['pos'][0]+34)<.1 for c in riders),'Riders arrive')
+    driver.action('cargo_door')
+    wait(lambda:not world(host)['vehicles']['van_01']['door_open'],'Cargo door closes')
+    for c in riders:
+        c.action('vehicle','van_01')
+        wait(lambda c=c:player(host,c.id)['vehicle']=='van_01','Passenger boards '+c.name)
+    clients[6].action('vehicle','van_01')
+    wait(lambda:'четыре места' in clients[6].state()['message'],'Fifth vehicle occupant rejected')
+    wait(lambda:len(world(winner)['vehicles']['van_01']['passengers'])==4,'Four vehicle seats replicate')
+    old=world(host)['vehicles']['van_01']['pos'][:]
+    riders[1].command(move=[0,-1]);time.sleep(.4);riders[1].command(move=[0,0])
+    assert world(host)['vehicles']['van_01']['pos']==old
+    CHECKS.append('Passenger movement cannot drive');print('PASS Passenger movement cannot drive',flush=True)
+    for c in riders:
+        c.action('vehicle','van_01')
+        wait(lambda c=c:player(host,c.id)['vehicle']=='','Passenger exits '+c.name)
+    # Keep cargo and stats through disconnect, save/load, and a new snapshot.
+    winner.action('accept_order','d001_02')
+    wait(lambda:world(host)['orders']['d001_02']['status']=='active','Second contract accepted')
+    iid2=world(host)['orders']['d001_02']['item']
+    loc=world(host)['items'][iid2]['pos']
     host.command(teleport={holder:loc})
-    wait(lambda:abs(player(winner)['pos'][0]-loc[0])<.1,'Second parcel location synchronized')
-    winner.action('pickup','parcel_02')
-    wait(lambda:'parcel_02' in player(host,holder)['inventory'],'Durable item acquired')
-    profile=winner.path
-    winner.stop()
-    wait(lambda:not player(host,holder)['connected'],'Client departure saves offline player')
+    wait(lambda:abs(player(winner)['pos'][0]-loc[0])<.1,'Second cargo position synchronized')
+    winner.action('pickup',iid2)
+    wait(lambda:iid2 in player(host,holder)['inventory'],'Durable cargo acquired')
+    profile=winner.path;winner.stop()
+    wait(lambda:not player(host,holder)['connected'],'Departure retains offline player')
     restored=Bot('reconnected',profile=profile)
     wait(lambda:connected(restored),'Same local PlayerID reconnects')
-    wait(lambda:restored.id==holder and player(restored)['money']==550 and 'parcel_02' in player(restored)['inventory'] and player(restored)['stats']['deliveries']==1,'Reconnect restores inventory, money and stats')
-    duplicate_dir=ROOT/'duplicate-profile'
-    duplicate_dir.mkdir()
-    shutil.copy(profile/'identity.key',duplicate_dir/'identity.key')
+    wait(lambda:restored.id==holder and iid2 in player(restored)['inventory'] and player(restored)['stats']['deliveries']==1 and world(restored)['economy']['company']['balance']==200,'Reconnect restores cargo, company and personal progress')
+    duplicate_dir=ROOT/'duplicate-profile';duplicate_dir.mkdir();shutil.copy(profile/'identity.key',duplicate_dir/'identity.key')
     duplicate=Bot('duplicate',profile=duplicate_dir)
-    wait(lambda:'already connected' in duplicate.state()['message'],'Duplicate identity cannot displace a player')
-    duplicate.stop()
-    wid=world(host)['world_id']
-    host.command(save=True)
-    wait(lambda:(host.path/'Saves/NetworkTest/world.sav').exists(),'Host save file exists')
-    assert not (restored.path/'Saves').exists(), 'Client must never create world saves'
-    CHECKS.append('Client stores no host world save');print('PASS Client stores no host world save',flush=True)
+    wait(lambda:'already connected' in duplicate.state()['message'],'Duplicate identity cannot displace player');duplicate.stop()
+    wid=world(host)['world_id'];host.command(save=True)
+    wait(lambda:(host.path/'Saves/NetworkTest/world.sav').exists(),'Host save exists')
+    assert not (restored.path/'Saves').exists()
+    CHECKS.append('Client has no world save');print('PASS Client has no world save',flush=True)
     host.stop()
-    wait(lambda:not connected(restored) and restored.state()['message']=='Host disconnected.','Host exit closes session with explicit reason')
+    wait(lambda:not connected(restored) and restored.state()['message']=='Host disconnected.','Host departure explicitly ends session')
     for c in clients+[restored]:c.stop()
     host2=Bot('host-reloaded','host',load=True,profile=host.path)
-    wait(lambda:connected(host2),'Host loads saved world')
+    wait(lambda:connected(host2),'Host loads persistent world')
     restored2=Bot('client-reloaded',profile=profile)
-    wait(lambda:connected(restored2),'Client rejoins reloaded world')
-    wait(lambda:world(restored2)['world_id']==wid and player(restored2)['money']==550 and 'parcel_02' in player(restored2)['inventory'],'Save/load retains world identity and progress')
+    wait(lambda:connected(restored2),'Client joins reloaded world')
+    wait(lambda:world(restored2)['world_id']==wid and iid2 in player(restored2)['inventory'] and world(restored2)['vehicles']['van_01']['capacity']==10,'Save/load preserves world, cargo and upgrades')
+    host2.command(teleport={host2.id:[-43,0,16]})
+    wait(lambda:abs(player(host2)['pos'][2]-16)<.1,'Host reaches shift terminal')
+    host2.action('end_shift')
+    wait(lambda:world(restored2)['economy']['shift']['status']=='finished','Shift report replicates to client')
+    host2.action('next_shift')
+    wait(lambda:world(restored2)['economy']['shift']['day']==2 and not world(restored2)['items'] and len(world(restored2)['orders'])==10 and not player(restored2)['inventory'],'Next night reliably deletes prior cargo and preserves world')
+    assert world(restored2)['world_id']==wid
     restored2.stop();host2.stop()
     empty_host=Bot('no-password-host','host',password='')
-    wait(lambda:connected(empty_host),'Host starts without a password')
+    wait(lambda:connected(empty_host),'Host starts without password')
     empty_client=Bot('no-password-client',password='')
-    wait(lambda:connected(empty_client),'Optional empty password works end to end')
+    wait(lambda:connected(empty_client),'Optional empty password handshake works')
     pos=player(empty_host,empty_client.id)['pos'][:]
     empty_client.command(move=[1000000,1000000])
-    wait(lambda:empty_client.state()['command_id']==1,'Oversized movement request sent')
-    time.sleep(.5)
-    assert player(empty_host,empty_client.id)['pos']==pos, 'Malformed input must never move player'
-    CHECKS.append('Oversized movement is rejected');print('PASS Oversized movement is rejected',flush=True)
+    wait(lambda:empty_client.state()['command_id']==1,'Malformed movement sent');time.sleep(.4)
+    assert player(empty_host,empty_client.id)['pos']==pos
+    CHECKS.append('Oversized movement rejected');print('PASS Oversized movement rejected',flush=True)
     empty_host.proc.kill();empty_host.proc.wait()
-    wait(lambda:not connected(empty_client) and empty_client.state()['message']=='Host disconnected.','Abrupt host termination is detected',timeout=40)
+    wait(lambda:not connected(empty_client) and empty_client.state()['message']=='Host disconnected.','Abrupt host termination detected',timeout=40)
     empty_client.stop()
     for bot in BOTS:
-        bot.log.flush()
-        content=bot.logpath.read_text()
-        if 'SCRIPT ERROR' in content or '\nERROR:' in content:
-            raise AssertionError(f'Engine error in {bot.logpath}:\n{content[:2000]}')
+        bot.log.flush();content=bot.logpath.read_text()
+        if 'SCRIPT ERROR' in content or '\nERROR:' in content:raise AssertionError(f'Engine error in {bot.logpath}:\n{content[:2000]}')
     print(f'NETWORK TESTS: {len(CHECKS)} passed; real ENet host + 7 clients',flush=True)
     (PROJECT/'tests'/'last_network_result.json').write_text(json.dumps({'checks':CHECKS,'count':len(CHECKS)},indent=2))
 except Exception:

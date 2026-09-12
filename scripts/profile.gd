@@ -8,6 +8,9 @@ var key: CryptoKey
 var public_key = ""
 var recent: Array = []
 var fullscreen = false
+var volume = 0.7
+var music = 0.4
+var shadows = true
 var storage_error = ""
 
 func _ready() -> void:
@@ -33,6 +36,9 @@ func _ready() -> void:
 		nickname = str(cfg.get_value("player", "nickname", "")).strip_edges().left(24)
 		recent = cfg.get_value("network", "recent", [])
 		fullscreen = bool(cfg.get_value("display", "fullscreen", false))
+		volume = clampf(float(cfg.get_value("audio", "volume", 0.7)),0,1)
+		music = clampf(float(cfg.get_value("audio", "music", 0.4)),0,1)
+		shadows = bool(cfg.get_value("display", "shadows", true))
 	if DisplayServer.get_name() != "headless":
 		apply_display()
 
@@ -44,6 +50,9 @@ func save_profile() -> Error:
 	cfg.set_value("player", "nickname", nickname)
 	cfg.set_value("network", "recent", recent)
 	cfg.set_value("display", "fullscreen", fullscreen)
+	cfg.set_value("audio", "volume", volume)
+	cfg.set_value("audio", "music", music)
+	cfg.set_value("display", "shadows", shadows)
 	return cfg.save(root.path_join("profile.cfg"))
 
 func remember(address: String) -> void:

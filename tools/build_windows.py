@@ -1,6 +1,6 @@
 """Reproducible Godot 4.4.1 Windows export. Python standard library only."""
 from __future__ import annotations
-import argparse, io, json, os, pathlib, platform, shutil, subprocess, urllib.request, zipfile
+import argparse, io, json, os, pathlib, platform, re, shutil, subprocess, urllib.request, zipfile
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERSION = '4.4.1-stable'
@@ -76,14 +76,18 @@ def build(executable):
         result = subprocess.run([str(executable), '--headless', '--path', str(ROOT), *args],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         print(result.stdout, end='')
-        if result.returncode or 'SCRIPT ERROR' in result.stdout or '\nERROR:' in result.stdout:
+        # Godot 4.4.1's headless editor cannot render import thumbnails.
+        # Only this exact upstream diagnostic is non-fatal; all other errors fail.
+        # https://github.com/godotengine/godot/issues/108994
+        checked = re.sub(r'ERROR: Parameter "t" is null\.\n\s+at: texture_2d_get \(servers/rendering/dummy/storage/texture_storage\.h:\d+\)\n', '', result.stdout)
+        if result.returncode or 'SCRIPT ERROR' in checked or '\nERROR:' in checked:
             raise RuntimeError('Godot import/export failed; see the log above.')
     run(['--editor', '--import', '--quit'])
     run(['--export-release', 'Windows Desktop', str(output/'AfterHours.exe')])
     if (output/'AfterHours.exe').read_bytes()[:2] != b'MZ': raise RuntimeError('No Windows executable was produced.')
     if not (output/'AfterHours.pck').exists(): raise RuntimeError('Game data pack is missing.')
     shutil.copyfile(ROOT/'README.md', output/'READ-ME.md')
-    for filename in ['GODOT-LICENSE.txt', 'GODOT-COPYRIGHT.txt']:
+    for filename in ['GODOT-LICENSE.txt', 'GODOT-COPYRIGHT.txt', 'ASSET-LICENSES.txt']:
         shutil.copyfile(ROOT/'docs'/filename, output/filename)
     archive = ROOT/'build'/'AfterHours-Windows.zip'
     with zipfile.ZipFile(archive, 'w', zipfile.ZIP_DEFLATED, compresslevel=6) as package:

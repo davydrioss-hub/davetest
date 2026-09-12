@@ -19,10 +19,18 @@ var move_timer = 0.0
 var hud_timer = 0.0
 var toast_timer = 0.0
 var current_menu = "main"
+var view: Node3D
+var tablet: Control
+var tablet_page = ""
+var last_message = ""
+var last_money = -1
+var brake_sent = false
 
 func _ready() -> void:
 	get_tree().auto_accept_quit = false
-	add_child(View.new())
+	view = View.new()
+	add_child(view)
+	add_child(load("res://scripts/game_audio.gd").new())
 	var canvas = CanvasLayer.new()
 	add_child(canvas)
 	ui = Control.new()
@@ -33,6 +41,7 @@ func _ready() -> void:
 	Session.entered.connect(_enter_game)
 	Session.ended.connect(func(reason: String):
 		paused = false
+		if is_instance_valid(tablet): tablet.queue_free(); tablet=null
 		if hud: hud.queue_free(); hud = null
 		_show_main()
 		if not reason.is_empty(): _notify(reason))
@@ -117,9 +126,13 @@ func _shell(kicker: String, title: String, subtitle: String = "") -> VBoxContain
 	screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	ui.add_child(screen)
 	var shade = ColorRect.new()
-	shade.color = Color(0.045, 0.085, 0.1, 0.75)
+	shade.color = Color(0.045, 0.085, 0.1, 0.48)
 	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	screen.add_child(shade)
+	var backing = ColorRect.new()
+	backing.color = Color(0.04,0.09,0.12,0.92)
+	backing.size = Vector2(625,900)
+	screen.add_child(backing)
 	var margin = MarginContainer.new()
 	margin.position = Vector2(64, 30)
 	margin.size = Vector2(510, 835)
@@ -135,13 +148,13 @@ func _shell(kicker: String, title: String, subtitle: String = "") -> VBoxContain
 	gap.custom_minimum_size.y = 6
 	column.add_child(gap)
 	_label(screen, "PRIVATE CO-OP  /  01", 15, ACCENT).position = Vector2(1115, 44)
-	_label(screen, "LAN + DIRECT IP    /    WINDOWS    /    PROTOTYPE 0.1", 12, MUTED).position = Vector2(825, 850)
+	_label(screen, "LAN + DIRECT IP    /    WINDOWS    /    NIGHT SHIFT 0.2", 12, MUTED).position = Vector2(825, 850)
 	return column
 
 func _show_main() -> void:
 	current_menu = "main"
-	var col = _shell("THE LAST SHIFT IS YOURS.", "AFTER\nHOURS", "A small yard. A shared world. Your friends.")
-	_label(col, "PRIVATE MULTIPLAYER SANDBOX", 12, ACCENT)
+	var col = _shell("THE LAST SHIFT IS YOURS.", "AFTER\nHOURS", "Вечерний город. Своя компания. Ваша команда.")
+	_label(col, "CO-OP DELIVERY / NIGHT SHIFT", 12, ACCENT)
 	_button(col, "PLAY                                   →", _show_play, true)
 	_button(col, "SETTINGS", _show_settings)
 	_button(col, "EXIT", _quit)
@@ -167,7 +180,7 @@ func _show_play() -> void:
 	_button(col, "← BACK", _show_main)
 
 func _show_host(solo: bool = false) -> void:
-	var col = _shell("SINGLE PLAYER" if solo else "HOST GAME", "Open the yard.")
+	var col = _shell("SINGLE PLAYER" if solo else "HOST GAME", "Начать смену.")
 	var name_edit = _field(col, "Server name", "Friends' night")
 	name_edit.max_length = 48
 	var row = HBoxContainer.new()
@@ -226,182 +239,261 @@ func _show_join() -> void:
 	_label(col, "The host must keep their game running.", 14, MUTED)
 
 func _show_connecting() -> void:
-	var col = _shell("CONNECTING", "Joining the yard…", "Verifying your identity and synchronizing the world.")
+	var col = _shell("CONNECTING", "Подключение…", "Verifying your identity and synchronizing the world.")
 	_label(col, Session.address, 20, ACCENT)
 	_button(col, "CANCEL", func(): Session.leave())
 
 func _show_settings() -> void:
-	var col = _shell("SETTINGS", "Make it yours.")
-	var nick = _field(col, "Nickname", Profile.nickname)
-	nick.max_length = 24
-	var full = CheckButton.new()
-	full.text = "Fullscreen"
-	full.button_pressed = Profile.fullscreen
-	col.add_child(full)
-	_label(col, "PLAYER ID\n" + Profile.player_id, 12, MUTED)
-	_label(col, "WASD · Move / drive     E · Interact     F · Deliver\nQ · Drop parcel     T · Store supply     R · Respawn\nEsc · Session menu     F5 · Save (host)", 16, MUTED)
-	_button(col, "SAVE SETTINGS", func():
-		if nick.text.strip_edges().is_empty(): _notify("Please enter a nickname."); return
-		Profile.nickname = nick.text.strip_edges()
-		Profile.fullscreen = full.button_pressed
-		Profile.apply_display()
-		if Profile.save_profile() != OK: _notify("Cannot save settings."); return
-		_show_main(), true)
-	_button(col, "← BACK", _show_main)
+	var col = _shell("SETTINGS", "Настройки.")
+	var nick = _field(col,"Nickname",Profile.nickname); nick.max_length=24
+	var full=CheckButton.new(); full.text="Полный экран"; full.button_pressed=Profile.fullscreen;col.add_child(full)
+	var shadow=CheckButton.new();shadow.text="Тени и сглаживание";shadow.button_pressed=Profile.shadows;col.add_child(shadow)
+	_label(col,"Громкость",14,MUTED)
+	var volume=HSlider.new();volume.max_value=1;volume.step=0.05;volume.value=Profile.volume;col.add_child(volume)
+	_label(col,"Музыка",14,MUTED)
+	var music=HSlider.new();music.max_value=1;music.step=0.05;music.value=Profile.music;col.add_child(music)
+	_label(col,"WASD · Движение / руль    ПКМ · Камера\nE · Действие    F · Груз    G · Крепления\nTab · Планшет    M · Карта    Q · Положить\nПробел · Тормоз    H · Сигнал    Esc · Меню",16,MUTED)
+	_button(col,"СОХРАНИТЬ",func():
+		if nick.text.strip_edges().is_empty(): _notify("Введите имя.");return
+		Profile.nickname=nick.text.strip_edges();Profile.fullscreen=full.button_pressed
+		Profile.volume=volume.value;Profile.music=music.value;Profile.shadows=shadow.button_pressed
+		Profile.apply_display();view.sun.shadow_enabled=Profile.shadows
+		get_viewport().msaa_3d=Viewport.MSAA_2X if Profile.shadows else Viewport.MSAA_DISABLED
+		if Profile.save_profile()!=OK:_notify("Не удалось сохранить настройки.");return
+		_show_main(),true)
+	_button(col,"← НАЗАД",_show_main)
 
 func _enter_game() -> void:
-	if screen: screen.queue_free(); screen = null
-	paused = false
-	hud = Control.new()
-	hud.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hud.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	ui.add_child(hud)
-	var panel = PanelContainer.new()
-	panel.position = Vector2(24, 22)
-	panel.custom_minimum_size = Vector2(375, 0)
-	panel.add_theme_stylebox_override("panel", _style(Color(0.07, 0.12, 0.14, 0.93)))
-	hud.add_child(panel)
-	var info = VBoxContainer.new()
-	panel.add_child(info)
-	_label(info, "AH  /  " + Session.server_name, 16, ACCENT)
-	status_label = _label(info, "", 15)
-	inventory_label = _label(info, "", 14, MUTED)
-	var objectives = PanelContainer.new()
-	objectives.position = Vector2(1050, 22)
-	objectives.custom_minimum_size.x = 365
-	objectives.add_theme_stylebox_override("panel", _style(Color(0.07, 0.12, 0.14, 0.94)))
-	hud.add_child(objectives)
-	objective_label = _label(objectives, "", 16, PAPER)
-	var interaction = PanelContainer.new()
-	interaction.position = Vector2(420, 780)
-	interaction.add_theme_stylebox_override("panel", _style(Color(0.07, 0.12, 0.14, 0.9)))
-	hud.add_child(interaction)
-	prompt_label = _label(interaction, "", 22, ACCENT)
-	_label(hud, "WASD MOVE  ·  E INTERACT  ·  F DELIVER  ·  Q DROP  ·  T STORE  ·  ESC MENU", 13, PAPER).position = Vector2(385, 860)
+	if screen: screen.queue_free();screen=null
+	paused=false;last_money=-1;last_message=""
+	hud=Control.new();hud.mouse_filter=Control.MOUSE_FILTER_IGNORE;hud.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);ui.add_child(hud)
+	var panel=PanelContainer.new();panel.position=Vector2(24,22);panel.custom_minimum_size=Vector2(400,0);panel.mouse_filter=Control.MOUSE_FILTER_IGNORE;panel.add_theme_stylebox_override("panel",_style(Color(0.04,0.09,0.12,0.92)));hud.add_child(panel)
+	var info=VBoxContainer.new();panel.add_child(info)
+	_label(info,"AH  /  AFTER HOURS",17,ACCENT)
+	status_label=_label(info,"",16)
+	inventory_label=_label(info,"",14,MUTED)
+	var objectives=PanelContainer.new();objectives.position=Vector2(1080,22);objectives.custom_minimum_size=Vector2(336,0);objectives.add_theme_stylebox_override("panel",_style(Color(0.04,0.09,0.12,0.92)));hud.add_child(objectives)
+	objective_label=_label(objectives,"",15)
+	var interaction=PanelContainer.new();interaction.position=Vector2(330,780);interaction.custom_minimum_size=Vector2(780,0);interaction.add_theme_stylebox_override("panel",_style(Color(0.04,0.09,0.12,0.94)));hud.add_child(interaction)
+	prompt_label=_label(interaction,"",18,ACCENT);prompt_label.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
+	_label(hud,"WASD  ДВИЖЕНИЕ    ПКМ  КАМЕРА    E  ДЕЙСТВИЕ    F  ГРУЗ    TAB  КОНТРАКТЫ    M  КАРТА    ESC  МЕНЮ",13,PAPER).position=Vector2(230,860)
 	_update_hud()
+	_notify("Ваша компания готова. Нажмите Tab, выберите первый заказ. Груз появится у гаража.")
 
 func _pause() -> void:
-	paused = true
-	Session.send_movement(Vector2.ZERO)
-	var col = _shell("SESSION MENU", "Take a breather.", "The shared world keeps running while this menu is open.")
-	_button(col, "RESUME  →", _resume, true)
-	if Session.is_host: _button(col, "SAVE WORLD", func(): Session.save_world())
-	_button(col, "SAVE & END SESSION" if Session.is_host else "LEAVE SESSION", func():
-		var error = Session.leave()
-		if not error.is_empty(): _notify(error))
-	if Session.is_host: _label(col, "Ending the session disconnects the whole crew.", 14, MUTED)
-
+	_close_tablet();paused=true;Session.send_movement(Vector2.ZERO)
+	var col=_shell("SESSION MENU","Перерыв.","Общая смена продолжается, пока открыто меню.")
+	_button(col,"ПРОДОЛЖИТЬ  →",_resume,true)
+	_button(col,"УПРАВЛЕНИЕ И ПОДСКАЗКИ",func():_resume();_open_tablet("help"))
+	if Session.is_host:
+		_button(col,"СОХРАНИТЬ МИР",func():Session.save_world())
+		_button(col,"ЭВАКУАТОР В ГАРАЖ",func():_request("tow");_notify("Все должны выйти из машины. Эвакуация стоит 1 очко репутации."))
+	_button(col,"СОХРАНИТЬ И ЗАВЕРШИТЬ" if Session.is_host else "ПОКИНУТЬ ИГРУ",func():
+		var error=Session.leave()
+		if not error.is_empty():_notify(error))
 func _resume() -> void:
-	paused = false
-	if screen: screen.queue_free(); screen = null
-
-func _notify(message: String) -> void:
-	if not is_instance_valid(toast):
-		toast = _label(ui, "", 16, ACCENT)
-		toast.position = Vector2(64, 810)
-	toast.text = message
-	toast.move_to_front()
-	toast_timer = 6.0
+	paused=false
+	if screen:screen.queue_free();screen=null
+func _notify(message:String) -> void:
+	if not is_instance_valid(toast):toast=_label(ui,"",16,ACCENT);toast.position=Vector2(245,690);toast.size=Vector2(950,65);toast.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;toast.add_theme_stylebox_override("normal",_style(Color(0.04,0.09,0.12,0.94)))
+	toast.text=message;toast.move_to_front();toast_timer=7.0
+func _request(action:String,target:String="") -> void:
+	Session.request(action,target)
+	if is_instance_valid(tablet):
+		get_tree().create_timer(0.25).timeout.connect(func():
+			if is_instance_valid(tablet) and Session.active:_open_tablet(tablet_page))
+func _close_tablet() -> void:
+	if is_instance_valid(tablet):tablet.queue_free();tablet=null
+	tablet_page="";view.capture_orbit=true
+func _open_tablet(page:String="jobs") -> void:
+	if not Session.active:return
+	_close_tablet();tablet_page=page;view.capture_orbit=false;Session.send_movement(Vector2.ZERO)
+	tablet=PanelContainer.new();tablet.position=Vector2(210,110);tablet.size=Vector2(1020,650);tablet.add_theme_stylebox_override("panel",_style(Color("112b37"),1,Color("496672")));ui.add_child(tablet)
+	var col=VBoxContainer.new();tablet.add_child(col)
+	var nav=HBoxContainer.new();col.add_child(nav)
+	for tab in [["jobs","Контракты"],["map","Карта"],["cargo","Багажник"],["garage","Компания"],["help","Помощь"]]:
+		var b=_button(nav,tab[1],_open_tablet.bind(tab[0]),page==tab[0]);b.custom_minimum_size.y=40;b.add_theme_font_size_override("font_size",15)
+	_button(nav,"×",_close_tablet).custom_minimum_size.y=40
+	var scroll=ScrollContainer.new();scroll.custom_minimum_size=Vector2(970,550);scroll.size_flags_vertical=Control.SIZE_EXPAND_FILL;col.add_child(scroll)
+	var body=VBoxContainer.new();body.size_flags_horizontal=Control.SIZE_EXPAND_FILL;scroll.add_child(body)
+	var s=Session.state();var p=s.players[Profile.player_id];var company=s.economy.company
+	match page:
+		"jobs":
+			_label(body,"КОНТРАКТЫ  /  ГРУЗЫ В ГАРАЖЕ",24,ACCENT)
+			_label(body,"Одновременно: %d. Примите заказ, затем заберите коробку с погрузочной площадки."%[2+int(company.garage)*2],15,MUTED)
+			for oid in s.orders:
+				var o=s.orders[oid]
+				if o.status in ["completed","failed"]:continue
+				var dest=World.destination(o)
+				var row=HBoxContainer.new();body.add_child(row)
+				var text="%s  ·  %s  ·  до $%d"%[o.title,dest.name,o.reward]
+				if o.status=="active":text="● "+text+"  /  в работе"
+				var l=_label(row,text,16);l.size_flags_horizontal=Control.SIZE_EXPAND_FILL
+				if o.status=="available":
+					var b=_button(row,"ПРИНЯТЬ",_request.bind("accept_order",oid));b.disabled=int(company.reputation)<int(o.required_rep) or s.economy.shift.status!="active"
+					if b.disabled:b.text="Репутация 2" if s.economy.shift.status=="active" else "Смена закрыта"
+				else:_button(row,"МАРШРУТ",func():Session.request("ping",oid);_open_tablet("map"))
+			_label(body,"Срочный: 3 минуты. Хрупкий: берегите от ударов. Тяжёлый: 3 места в багажнике.\nНесколько адресов: отметьте груз на каждом пункте. Оплата поступает после последнего.",15,MUTED)
+		"map":
+			_label(body,"РАЙОН / ЖЁЛТЫЕ МЕТКИ — АКТИВНЫЕ ДОСТАВКИ",19,ACCENT)
+			body.add_child(load("res://scripts/map_view.gd").new())
+		"cargo":
+			var v=s.vehicles.van_01
+			_label(body,"ФУРГОН / 4 МЕСТА / %d ЯЧЕЕК ГРУЗА"%v.capacity,23,ACCENT)
+			_label(body,"Для действий подойдите к задней двери. Откройте её клавишей E.\nВыберите коробку для разгрузки; доставляйте её получателю в руках.",16,MUTED)
+			for iid in v.cargo:
+				var item=s.items[iid];var row=HBoxContainer.new();body.add_child(row)
+				var l=_label(row,"%s · %d%% · %s"%[World.TYPE_NAMES[item.kind],int(item.condition),"закреплён" if item.secured else "НЕ закреплён"],18);l.size_flags_horizontal=Control.SIZE_EXPAND_FILL
+				_button(row,"ВЗЯТЬ",_request.bind("unload",iid))
+			if v.cargo.is_empty():_label(body,"Багажник пока пуст.",18)
+			_button(body,"ЗАКРЕПИТЬ ВСЁ [G]",_request.bind("secure"))
+			_button(body,"ЗАГРУЗИТЬ ГРУЗ ИЗ РУК [F]",_request.bind("load"))
+			_label(body,"Состояние фургона: %d%%  /  Топливо: %d%%"%[int(v.health),int(v.fuel)],17,ACCENT)
+		"garage":
+			_label(body,"КОМПАНИЯ  /  $%d  /  РЕПУТАЦИЯ %d"%[company.balance,company.reputation],23,ACCENT)
+			var role=HBoxContainer.new();body.add_child(role)
+			for title in ["Курьер","Водитель","Грузчик","Диспетчер"]:_button(role,title,_request.bind("role",title),p.role==title).add_theme_font_size_override("font_size",14)
+			for up in [["capacity","Вместимость: 6 → 10 ячеек"],["equipment","Автоматические крепления груза"],["garage","Расширение: 2 → 4 активных заказа"]]:
+				var installed=int(company[up[0]])>0
+				var b=_button(body,up[1]+("  /  УСТАНОВЛЕНО" if installed else "  /  $%d"%World.UPGRADE_PRICES[up[0]]),_request.bind("upgrade",up[0]));b.disabled=installed
+			_button(body,"РЕМОНТ И ЗАПРАВКА / НА ПЛОЩАДКЕ ГАРАЖА",_request.bind("repair"))
+			var shift=s.economy.shift
+			if shift.status=="finished":
+				var r=shift.report
+				_label(body,"ОТЧЁТ СМЕНЫ %d  /  %s"%[shift.day,"ЦЕЛЬ ВЫПОЛНЕНА" if r.success else "ЕСТЬ КУДА РАСТИ"],20,ACCENT)
+				_label(body,"Доход $%d  −  расходы $%d  =  прибыль $%d\nДоставки %d  /  Опоздания %d  /  Повреждённые грузы %d"%[r.income,r.expenses,r.profit,r.deliveries,r.late,r.damaged],17)
+				if Session.is_host:_button(body,"СЛЕДУЮЩАЯ СМЕНА / У ТЕРМИНАЛА",_request.bind("next_shift"),true)
+			elif Session.is_host:_button(body,"ЗАВЕРШИТЬ СМЕНУ / У ТЕРМИНАЛА",func():_open_tablet("confirm"))
+			_label(body,"Роли помогают договориться с друзьями. Каждый может выполнять любую работу.",14,MUTED)
+		"confirm":
+			_label(body,"Завершить текущую смену?",28,ACCENT)
+			_label(body,"Незаконченные заказы будут закрыты без оплаты.\nВ отчёт войдут расходы на обслуживание: до $80.",18)
+			_button(body,"ДА, ПОДВЕСТИ ИТОГИ",func():_request("end_shift");_open_tablet("garage"),true)
+			_button(body,"ПРОДОЛЖИТЬ РАБОТУ",_close_tablet)
+		"help":
+			_label(body,"ПЕРВАЯ ДОСТАВКА",26,ACCENT)
+			_label(body,"1. Примите обычный заказ на вкладке «Контракты».\n2. Возьмите коробку у гаража: подойдите и нажмите E.\n3. У задней двери фургона: E открыть, F загрузить, G закрепить.\n4. Закройте багажник (E), подойдите сбоку и сядьте (E).\n5. Найдите адрес на карте (M), довезите груз. Пробел — тормоз.\n6. Остановитесь, выйдите (E), откройте багажник сзади.\n7. F — взять коробку; у жёлтой метки F — завершить доставку.\n8. Прибыль поступит компании. Улучшения покупаются в гараже.",18)
+			_label(body,"ПКМ + мышь — поворот камеры. Колесо — расстояние.\nТяжёлый груз: E у друга, чтобы нести вдвоём; Q — поставить.\nВ одиночку доступна медленная тележка. R — возрождение.\nЗастряли или закончился бензин? Выйдите и вызовите эвакуатор: Esc.\nПауза и планшет не останавливают общую смену. Хост сохраняет мир F5.",16,MUTED)
 
 func nearest() -> Dictionary:
-	if not Session.active: return {}
-	var state = Session.state()
-	var p = state.players[Profile.player_id]
-	if not p.alive: return {"action": "respawn", "id": "", "label": "[R]  RESPAWN"}
-	if not p.vehicle.is_empty(): return {"action": "vehicle", "id": p.vehicle, "label": "[E]  EXIT VAN     WASD DRIVE"}
-	var best = 3.0
-	var result: Dictionary = {}
-	var mapping = {"items": ["pickup", "PICK UP PARCEL"], "doors": ["door", "TOGGLE GATE"], "containers": ["take_supply", "TAKE SUPPLY  /  [T] STORE"], "vehicles": ["vehicle", "ENTER VAN"], "properties": ["buy_property", "BUY DEPOT · $600"], "employees": ["hire", "HIRE · $150"]}
-	for domain in mapping:
-		for id in state[domain]:
-			var entity = state[domain][id]
-			if domain == "items" and (entity.delivered or not entity.holder.is_empty()): continue
-			if domain in ["properties", "employees"] and not entity.owner.is_empty(): continue
-			var distance = World.vec(p.pos).distance_to(World.vec(entity.pos))
-			if distance < best:
-				best = distance
-				result = {"action": mapping[domain][0], "id": id, "label": "[E]  " + mapping[domain][1]}
-	if World.vec(p.pos).distance_to(World.DELIVERY) < 2.8: return {"action": "deliver", "id": "", "label": "[F]  DELIVER PARCEL"}
-	return result
-
-func _unhandled_key_input(event: InputEvent) -> void:
-	if not event is InputEventKey or not event.pressed or event.echo or not Session.active: return
-	if event.keycode == KEY_ESCAPE:
-		if paused: _resume()
-		else: _pause()
-		return
-	if paused: return
-	var p = Session.state().players[Profile.player_id]
-	match event.keycode:
+	if not Session.active:return {}
+	var s=Session.state();var p=s.players[Profile.player_id];var pos=World.vec(p.pos);var v=s.vehicles.van_01
+	if not p.alive:return {"action":"respawn","id":"","label":"[R] ВОЗРОЖДЕНИЕ"}
+	if p.vehicle!="":return {"action":"vehicle","id":p.vehicle,"label":"[E] ВЫЙТИ · WASD РУЛЬ · ПРОБЕЛ ТОРМОЗ · [M] КАРТА" if v.driver==Profile.player_id else "ПАССАЖИР · [E] ВЫЙТИ · [M] КАРТА"}
+	var carry=World.held(p,s)
+	for oid in s.orders:
+		var o=s.orders[oid]
+		if o.status=="active" and carry==o.item and pos.distance_to(World.vec(World.destination(o).pos))<3.5:return {"action":"complete_order","id":oid,"label":"[F] ПЕРЕДАТЬ ГРУЗ · "+World.destination(o).name}
+	if pos.distance_to(World.rear(v))<3.4:
+		return {"action":"cargo_door","id":"van_01","label":"[E] "+("ЗАКРЫТЬ" if v.door_open else "ОТКРЫТЬ")+" БАГАЖНИК · [F] "+("ЗАГРУЗИТЬ" if carry!="" else "ВЗЯТЬ ГРУЗ")+" · [G] КРЕПЛЕНИЯ"}
+	var best=3.1;var result={}
+	if carry=="":
+		for iid in s.items:
+			var item=s.items[iid]
+			if item.delivered or item.container!="":continue
+			if item.holder!="" and (item.kind!="heavy" or item.carriers.size()!=1):continue
+			var at=World.vec(item.pos) if item.holder=="" else World.vec(s.players[item.holder].pos)
+			var d=pos.distance_to(at)
+			if d<best:best=d;result={"action":"pickup","id":iid,"label":"[E] "+("ПОМОЧЬ НЕСТИ" if item.holder!="" else "ВЗЯТЬ")+" · "+World.TYPE_NAMES[item.kind]}
+	if not result.is_empty():return result
+	if pos.distance_to(World.vec(v.pos))<4.2:return {"action":"vehicle","id":"van_01","label":"[E] СЕСТЬ В ФУРГОН / %d ИЗ 4 МЕСТ"%v.passengers.size()}
+	if pos.distance_to(World.Layout.GARAGE)<3.2:return {"action":"tablet","id":"garage","label":"[E] ТЕРМИНАЛ · КОМПАНИЯ И УЛУЧШЕНИЯ"}
+	if pos.distance_to(World.Layout.REPAIR)<3.0:return {"action":"repair","id":"","label":"[E] РЕМОНТ И ЗАПРАВКА ФУРГОНА"}
+	if pos.distance_to(World.vec(s.doors.gate_01.pos))<2.5:return {"action":"door","id":"gate_01","label":"[E] ВОРОТА ГАРАЖА"}
+	return {}
+func _unhandled_key_input(event:InputEvent) -> void:
+	if not event is InputEventKey or not event.pressed or event.echo or not Session.active:return
+	match event.physical_keycode:
+		KEY_ESCAPE:
+			if is_instance_valid(tablet):_close_tablet()
+			elif paused:_resume()
+			else:_pause()
+			return
+		KEY_TAB:
+			if not paused:
+				if is_instance_valid(tablet):_close_tablet()
+				else:_open_tablet()
+			return
+		KEY_M:
+			if not paused:
+				if tablet_page=="map":_close_tablet()
+				else:_open_tablet("map")
+			return
+	if paused or is_instance_valid(tablet):return
+	var s=Session.state();var p=s.players[Profile.player_id];var carry=World.held(p,s);var target=nearest()
+	match event.physical_keycode:
 		KEY_E:
-			var target = nearest()
-			if not target.is_empty() and target.action not in ["deliver", "respawn"]: Session.request(target.action, target.id)
+			if target.get("action")=="tablet":_open_tablet(target.id)
+			elif not target.is_empty() and target.action!="complete_order":_request(target.action,target.id)
 		KEY_F:
-			for id in Session.state().orders:
-				var order = Session.state().orders[id]
-				if order.status == "open" and p.inventory.has(order.item):
-					Session.request("complete_order", id)
-					return
-			_notify("Pick up a parcel, then bring it to Dispatch.")
+			if target.get("action")=="complete_order":_request(target.action,target.id)
+			elif World.vec(p.pos).distance_to(World.rear(s.vehicles.van_01))<3.6:
+				if carry!="":_request("load")
+				elif s.vehicles.van_01.cargo.size()==1:_request("unload",s.vehicles.van_01.cargo[0])
+				else:_open_tablet("cargo")
+		KEY_G:_request("secure")
 		KEY_Q:
-			for id in p.inventory:
-				if id.begins_with("parcel_"):
-					Session.request("drop", id)
-					return
-		KEY_T:
-			var target = nearest()
-			if target.get("action", "") == "take_supply": Session.request("store_supply", target.id)
-		KEY_R: Session.request("respawn")
+			if carry!="":_request("drop",carry)
+		KEY_R:_request("respawn")
+		KEY_H:
+			if p.vehicle!="":_request("horn")
+		KEY_I:_open_tablet("cargo")
 		KEY_F5:
-			var error = Session.save_world()
-			if not error.is_empty(): _notify(error)
-
-func _process(dt: float) -> void:
-	toast_timer -= dt
-	if is_instance_valid(toast): toast.visible = toast_timer > 0
-	if not Session.active: return
-	move_timer += dt
-	hud_timer += dt
-	if move_timer >= 1.0 / 30.0:
-		move_timer = 0.0
-		var axis = Vector2.ZERO
-		if not paused:
-			axis = Vector2(float(Input.is_physical_key_pressed(KEY_D)) - float(Input.is_physical_key_pressed(KEY_A)), float(Input.is_physical_key_pressed(KEY_S)) - float(Input.is_physical_key_pressed(KEY_W))).limit_length()
+			var err=Session.save_world()
+			if not err.is_empty():_notify(err)
+func _process(dt:float) -> void:
+	toast_timer-=dt
+	if is_instance_valid(toast):toast.visible=toast_timer>0
+	if not Session.active:return
+	move_timer+=dt;hud_timer+=dt
+	if move_timer>=1.0/30:
+		move_timer=0;var axis=Vector2.ZERO
+		var p=Session.state().players[Profile.player_id]
+		if not paused and not is_instance_valid(tablet):
+			axis=Vector2(float(Input.is_physical_key_pressed(KEY_D))-float(Input.is_physical_key_pressed(KEY_A)),float(Input.is_physical_key_pressed(KEY_S))-float(Input.is_physical_key_pressed(KEY_W))).limit_length()
+			if p.vehicle=="":axis=view.movement(axis)
+		var brake=Input.is_physical_key_pressed(KEY_SPACE) or paused or is_instance_valid(tablet)
+		if brake!=brake_sent:
+			brake_sent=brake
+			if p.vehicle!="" and Session.state().vehicles.van_01.driver==Profile.player_id:Session.request("brake","on" if brake else "off")
 		Session.send_movement(axis)
-	if hud_timer >= 0.1:
-		hud_timer = 0.0
-		_update_hud()
-
+	if hud_timer>=0.1:hud_timer=0;_update_hud()
 func _update_hud() -> void:
-	if not is_instance_valid(hud) or not Session.active: return
-	var state = Session.state()
-	var p = state.players[Profile.player_id]
-	var connected = 0
-	for player in state.players.values():
-		if player.connected: connected += 1
-	var clock = int(state.time)
-	status_label.text = "$%d    /    %d:%02d    /    CREW %d/%d" % [p.money, (clock / 3600) % 24, (clock / 60) % 60, connected, Session.player_limit]
-	var inventory: Array = []
-	for item in p.inventory: inventory.append(item.replace("parcel_", "Parcel ") + " ×" + str(p.inventory[item]))
-	inventory_label.text = "INVENTORY\n" + ("Empty — grab a parcel at the loading bays." if inventory.is_empty() else "\n".join(inventory))
-	var done = 0
-	for order in state.orders.values():
-		if order.status == "completed": done += 1
-	objective_label.text = "TONIGHT'S SHIFT\n\nDeliver the parcels to Dispatch.\n$250 per delivery.\n\n%02d / 08  ORDERS COMPLETED\n\nBuy the depot · $600\nHire a worker · $150\nWorker earns $25 / 30 sec" % done
-	var target = nearest()
-	prompt_label.text = target.get("label", "Find a parcel at the loading bays.")
-	if not p.alive:
-		prompt_label.text = "YOU ARE DOWN  ·  [R] RESPAWN" if state.time >= p.dead_until else "YOU ARE DOWN  ·  RESPAWN IN %d" % ceili(p.dead_until - state.time)
-
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_WM_CLOSE_REQUEST: _quit()
-
+	if not is_instance_valid(hud) or not Session.active:return
+	var s=Session.state();var p=s.players[Profile.player_id];var v=s.vehicles.van_01;var shift=s.economy.shift;var company=s.economy.company
+	var count=0
+	for player in s.players.values():
+		if player.connected:count+=1
+	var remain=maxi(0,int(shift.duration-(s.time-shift.started)))
+	status_label.text="$%d  /  РЕПУТАЦИЯ %d  /  КОМАНДА %d/%d"%[company.balance,company.reputation,count,Session.player_limit]
+	var carry=World.held(p,s)
+	inventory_label.text="СМЕНА %d · %02d:%02d  /  %s"%[shift.day,remain/60,remain%60,p.role]
+	if carry!="":inventory_label.text+="\nВ РУКАХ: "+World.TYPE_NAMES[s.items[carry].kind]+" · %d%%"%int(s.items[carry].condition)
+	if p.vehicle!="":inventory_label.text+="\n%02d км/ч  ·  Топливо %d%%  ·  Кузов %d%%"%[int(absf(v.speed)*3.6),int(v.fuel),int(v.health)]
+	objective_label.text="ПРИБЫЛЬ: $%d / $%d\n"%[shift.income-shift.expenses,shift.target]
+	var active=0
+	for o in s.orders.values():
+		if o.status!="active":continue
+		active+=1
+		var d=World.destination(o);var meters=int(World.vec(p.pos).distance_to(World.vec(d.pos)))
+		objective_label.text+="\n%s\n%s · %d м\n"%[o.title,d.name,meters]
+		if o.kind=="urgent":objective_label.text+="Осталось: %d сек\n"%maxi(0,int(o.deadline-s.time))
+	if active==0:objective_label.text+="\n[TAB] Принять новый заказ\n[M] Карта района"
+	if shift.status=="finished":objective_label.text="СМЕНА ЗАВЕРШЕНА\n\n[TAB] → Компания → Отчёт\nВернитесь к терминалу гаража."
+	var target=nearest()
+	prompt_label.text=target.get("label","[TAB] КОНТРАКТЫ  ·  [M] КАРТА  ·  [Q] ПОЛОЖИТЬ ГРУЗ" if carry!="" else "[TAB] КОНТРАКТЫ  ·  [M] КАРТА  ·  ПКМ ПОВОРОТ КАМЕРЫ")
+	if not p.alive:prompt_label.text="[R] ВОЗРОДИТЬСЯ" if s.time>=p.dead_until else "ВОЗРОЖДЕНИЕ ЧЕРЕЗ %d"%ceili(p.dead_until-s.time)
+	if last_money>=0 and int(company.balance)>last_money:_notify("Доставка выполнена! На счёт компании поступило $%d."%(int(company.balance)-last_money))
+	last_money=int(company.balance)
+	if s.economy.weather.message!=last_message:
+		last_message=s.economy.weather.message;_notify(last_message)
+func _notification(what:int) -> void:
+	if what==NOTIFICATION_WM_CLOSE_REQUEST:_quit()
 func _quit() -> void:
-	var error = Session.leave()
-	if error.is_empty(): get_tree().quit()
-	else: _notify(error + " Exit cancelled to protect your save.")
-
-func _capture(path: String) -> void:
+	var err=Session.leave()
+	if err.is_empty():get_tree().quit()
+	else:_notify(err)
+func _capture(path:String) -> void:
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png(path)
 	get_tree().quit()

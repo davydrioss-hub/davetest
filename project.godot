@@ -1,11 +1,11 @@
-; After Hours — private co-op network prototype. Godot 4.4.1.
+; After Hours — private co-op delivery game. Godot 4.4.1.
 config_version=5
 
 [application]
 config/name="After Hours"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.4", "GL Compatibility")
-config/description="Private co-op delivery yard. Host-authoritative LAN and Direct IP."
+config/description="After Hours: Night Shift. Cooperative deliveries in a small evening city."
 
 [autoload]
 Profile="*res://scripts/profile.gd"

@@ -1,7 +1,7 @@
 class_name SaveStore
 extends RefCounted
 ## One checksummed transaction contains every domain. Clients never call write().
-const SCHEMA = 1
+const SCHEMA = 2
 const DOMAINS = ["players", "items", "vehicles", "npcs", "police", "orders", "properties", "employees", "doors", "containers", "economy"]
 
 static func valid_slot(slot: String) -> bool:
@@ -35,6 +35,7 @@ static func write(root: String, slot: String, world: Dictionary) -> String:
 	for v in snapshot.vehicles.values():
 		v.driver = ""
 		v.speed = 0.0
+		if v.has("passengers"): v.passengers = []
 	var payload = JSON.stringify(snapshot)
 	var envelope = JSON.stringify({"schema": SCHEMA, "payload": payload, "sha256": payload.sha256_text()})
 	var path = directory.path_join("world.sav")
@@ -81,7 +82,7 @@ static func read_file(path: String) -> Dictionary:
 	if parser.parse(f.get_as_text()) != OK:
 		return {"ok": false, "error": "Save contains invalid JSON."}
 	var envelope = parser.data
-	if not envelope is Dictionary or envelope.get("schema") != SCHEMA:
+	if not envelope is Dictionary or (envelope.get("schema") != 1 and envelope.get("schema") != SCHEMA):
 		return {"ok": false, "error": "Unsupported or damaged save. No new world was created."}
 	var payload = envelope.get("payload", "")
 	if not payload is String or payload.sha256_text() != envelope.get("sha256", ""):
@@ -111,4 +112,31 @@ static func valid_world(world: Variant) -> bool:
 				return false
 		if not p.get("pos") is Array or p.pos.size() != 3 or not p.has("money") or not p.has("alive"):
 			return false
+	if int(world.get("format",1)) == 2:
+		for name in ["company","shift","weather"]:
+			if not world.economy.get(name) is Dictionary:return false
+		for key in ["balance","reputation","capacity","equipment","garage","total_deliveries"]:
+			if not world.economy.company.has(key):return false
+		for key in ["day","status","started","duration","target","income","expenses","deliveries","damaged","late","report"]:
+			if not world.economy.shift.has(key):return false
+		for key in ["rain","road_closed","event_index","message"]:
+			if not world.economy.weather.has(key):return false
+		if not world.vehicles.has("van_01") or not world.doors.has("gate_01"):return false
+		for v in world.vehicles.values():
+			for key in ["pos","yaw","driver","speed","passengers","cargo","capacity","door_open","health","fuel","brake"]:
+				if not v.has(key):return false
+			if not v.cargo is Array or not v.passengers is Array:return false
+			for iid in v.cargo:
+				if not world.items.has(iid):return false
+		for item in world.items.values():
+			for key in ["pos","kind","holder","carriers","container","condition","secured","slots","delivered"]:
+				if not item.has(key):return false
+			if not item.carriers is Array:return false
+		for o in world.orders.values():
+			for key in ["kind","title","reward","route","stage","status","item","deadline","required_rep"]:
+				if not o.has(key):return false
+			if not o.route is Array or o.route.is_empty():return false
+			for stop in o.route:
+				if int(stop)<0 or int(stop)>4:return false
+	elif int(world.get("format",1)) != 1:return false
 	return true

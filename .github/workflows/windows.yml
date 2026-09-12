@@ -29,3 +29,21 @@ jobs:
           path: build/AfterHours-Windows.zip
           if-no-files-found: error
           retention-days: 14
+  windows-runtime:
+    needs: test-and-build
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/download-artifact@v4
+        with:
+          name: AfterHours-Windows
+          path: package
+      - name: Unpack Windows game
+        shell: pwsh
+        run: Expand-Archive package/AfterHours-Windows.zip -DestinationPath packaged
+      - name: Run exported Windows EXE and verify host save
+        run: python tests/windows_smoke.py packaged/AfterHours/AfterHours.exe

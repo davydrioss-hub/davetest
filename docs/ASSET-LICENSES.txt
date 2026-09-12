@@ -1,0 +1,16 @@
+After Hours 0.2 — third-party artwork
+
+3D models, rigged characters, animations and character skins by Kenney.
+Used under Creative Commons CC0 1.0 Universal (public-domain dedication).
+Original license text is preserved alongside each source asset pack in assets/.
+
+City Kit (Commercial): https://kenney.nl/assets/city-kit-commercial
+City Kit (Suburban): https://kenney.nl/assets/city-kit-suburban
+Car Kit: https://kenney.nl/assets/car-kit
+Animated Characters (Protagonists): https://kenney.nl/assets/animated-characters-protagonists
+CC0: https://creativecommons.org/publicdomain/zero/1.0/
+
+The district layout, garage, cargo compartment, interface, game rules, sound
+synthesis and music synthesis were authored for this project. Kenney does not
+endorse this game. Godot's license and bundled third-party notices are included
+as GODOT-LICENSE.txt and GODOT-COPYRIGHT.txt.
