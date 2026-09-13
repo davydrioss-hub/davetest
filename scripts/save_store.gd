@@ -1,7 +1,7 @@
 class_name SaveStore
 extends RefCounted
 ## One checksummed transaction contains every domain. Clients never call write().
-const SCHEMA = 2
+const SCHEMA = 3
 const DOMAINS = ["players", "items", "vehicles", "npcs", "police", "orders", "properties", "employees", "doors", "containers", "economy"]
 
 static func valid_slot(slot: String) -> bool:
@@ -82,7 +82,7 @@ static func read_file(path: String) -> Dictionary:
 	if parser.parse(f.get_as_text()) != OK:
 		return {"ok": false, "error": "Save contains invalid JSON."}
 	var envelope = parser.data
-	if not envelope is Dictionary or (envelope.get("schema") != 1 and envelope.get("schema") != SCHEMA):
+	if not envelope is Dictionary or not (envelope.get("schema") is float or envelope.get("schema") is int) or not int(envelope.get("schema",0)) in [1,2,SCHEMA]:
 		return {"ok": false, "error": "Unsupported or damaged save. No new world was created."}
 	var payload = envelope.get("payload", "")
 	if not payload is String or payload.sha256_text() != envelope.get("sha256", ""):
@@ -112,7 +112,7 @@ static func valid_world(world: Variant) -> bool:
 				return false
 		if not p.get("pos") is Array or p.pos.size() != 3 or not p.has("money") or not p.has("alive"):
 			return false
-	if int(world.get("format",1)) == 2:
+	if int(world.get("format",1)) in [2,3]:
 		for name in ["company","shift","weather"]:
 			if not world.economy.get(name) is Dictionary:return false
 		for key in ["balance","reputation","capacity","equipment","garage","total_deliveries"]:
@@ -137,6 +137,18 @@ static func valid_world(world: Variant) -> bool:
 				if not o.has(key):return false
 			if not o.route is Array or o.route.is_empty():return false
 			for stop in o.route:
-				if int(stop)<0 or int(stop)>4:return false
+				if int(stop)<0 or int(stop)>=WorldLayout.DESTINATIONS.size():return false
 	elif int(world.get("format",1)) != 1:return false
+	if int(world.get("format",1))==3:
+		if not world.get("activities") is Dictionary:return false
+		for a in world.activities.values():
+			if not a is Dictionary:return false
+			for key in ["kind","title","pos","status","worker","finish_at"]:
+				if not a.has(key):return false
+		for key in ["engine","insurance","parts","discovered","repairs","chapter"]:
+			if not world.economy.company.has(key):return false
+		for vid in WorldState.FLEET:
+			if not world.vehicles.has(vid) or world.vehicles[vid].get("model")!=vid or not world.vehicles[vid].get("owned") is bool:return false
+		for sid in WorldState.STAFF:
+			if not world.employees.get(sid) is Dictionary or not world.employees[sid].get("hired") is bool:return false
 	return true

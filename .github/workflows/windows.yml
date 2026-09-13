@@ -7,13 +7,13 @@ permissions:
 jobs:
   test-and-build:
     runs-on: ubuntu-24.04
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - name: Prepare pinned engine
+      - name: Prepare pinned engine and material library
         run: python tools/build_windows.py --prepare-only
       - name: Import project
         run: .build-cache/Godot_v4.4.1-stable_linux.x86_64 --headless --path . --editor --import --quit

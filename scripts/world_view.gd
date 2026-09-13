@@ -21,7 +21,10 @@ var rain: MultiMeshInstance3D
 var gate: Node3D
 var roadworks: Node3D
 var garage_extension: Node3D
-var asphalt: ShaderMaterial
+var asphalt: StandardMaterial3D
+var pbr_cache: Dictionary = {}
+var activity_nodes: Dictionary = {}
+var staff_nodes: Dictionary = {}
 var capture_orbit = true
 var first_person_frame = true
 
@@ -30,7 +33,7 @@ func _ready() -> void:
 	var model = World.new(); model.create_world(); preview=model.data
 	_build_city()
 	_build_animations()
-	camera = Camera3D.new(); camera.fov=58; camera.near=0.15; camera.far=280
+	camera = Camera3D.new(); camera.fov=58; camera.near=0.15; camera.far=560
 	add_child(camera); camera.current=true
 	camera.position=focus+Vector3(8,12,16); camera.look_at(focus+Vector3.UP)
 	Session.entered.connect(func(): first_person_frame=true)
@@ -40,6 +43,22 @@ func material(color: Color, glow: float = 0.0, metal: float = 0.0) -> StandardMa
 	if glow>0:
 		m.emission_enabled=true; m.emission=color; m.emission_energy_multiplier=glow
 	return m
+func pbr(name: String, scale_uv: float=0.25) -> StandardMaterial3D:
+	var key=name+str(scale_uv)
+	if pbr_cache.has(key):return pbr_cache[key]
+	var m=StandardMaterial3D.new()
+	m.albedo_texture=load("res://assets/hd/"+name+"_albedo.jpg")
+	m.normal_enabled=true;m.normal_texture=load("res://assets/hd/"+name+"_normal.jpg");m.normal_scale=0.4
+	m.roughness_texture=load("res://assets/hd/"+name+"_roughness.jpg");m.roughness_texture_channel=BaseMaterial3D.TEXTURE_CHANNEL_RED
+	m.uv1_triplanar=true;m.uv1_world_triplanar=true;m.uv1_scale=Vector3.ONE*scale_uv
+	m.texture_filter=BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
+	m.albedo_color=Color("818b93") if name=="asphalt_02" else Color("c5c9ca")
+	pbr_cache[key]=m;return m
+func detailed(parent: Node3D,size: Vector3,pos: Vector3,surface: String,scale_uv: float=0.25) -> MeshInstance3D:
+	var mesh=box(parent,size,pos,Color.WHITE);mesh.material_override=pbr(surface,scale_uv);return mesh
+func cull(n: Node, reach: float) -> void:
+	if n is GeometryInstance3D:n.visibility_range_end=reach;n.visibility_range_end_margin=15
+	for child in n.get_children():cull(child,reach)
 func box(parent: Node3D, size: Vector3, pos: Vector3, color: Color, glow: float = 0.0) -> MeshInstance3D:
 	var m=MeshInstance3D.new(); var mesh=BoxMesh.new(); mesh.size=size
 	m.mesh=mesh; m.material_override=material(color,glow); m.position=pos; parent.add_child(m)
@@ -72,6 +91,7 @@ func asset(parent: Node3D, pack: String, file: String, pos: Vector3, size: Vecto
 		n.scale=size/b.size
 		n.position=-Vector3(b.get_center().x,b.position.y,b.get_center().z)*n.scale
 	wrapper.position=pos
+	cull(wrapper,230)
 	return wrapper
 func light(parent: Node3D,pos:Vector3,color:Color,energy:float,reach:float) -> OmniLight3D:
 	var l=OmniLight3D.new();l.position=pos;l.light_color=color;l.light_energy=energy;l.omni_range=reach;l.omni_attenuation=1.8
@@ -79,42 +99,52 @@ func light(parent: Node3D,pos:Vector3,color:Color,energy:float,reach:float) -> O
 
 func _build_city() -> void:
 	environment=Environment.new();environment.background_mode=Environment.BG_SKY
-	var sky=Sky.new();var sky_mat=ProceduralSkyMaterial.new()
-	sky_mat.sky_top_color=Color("152637");sky_mat.sky_horizon_color=Color("a37876");sky_mat.ground_bottom_color=Color("162c32");sky_mat.ground_horizon_color=Color("a37876");sky_mat.sky_curve=0.35
-	sky.sky_material=sky_mat;environment.sky=sky;environment.ambient_light_source=Environment.AMBIENT_SOURCE_COLOR;environment.ambient_light_color=Color("afc9d0");environment.ambient_light_energy=0.38
+	var sky=Sky.new();var sky_mat=ShaderMaterial.new();var sky_shader=Shader.new()
+	# Use the unobstructed upper sky of the panorama; exclude photographed foreground buildings.
+	sky_shader.code="shader_type sky; uniform sampler2D clouds:source_color,filter_linear; void sky(){vec2 uv=vec2(SKY_COORDS.x,clamp(SKY_COORDS.y*.56,.025,.28));vec3 c=texture(clouds,uv).rgb;COLOR=mix(vec3(.08,.13,.20),c*.4,.85);}"
+	sky_mat.shader=sky_shader;sky_mat.set_shader_parameter("clouds",load("res://assets/hd/twilight_sunset.hdr"))
+	sky.sky_material=sky_mat;sky.radiance_size=Sky.RADIANCE_SIZE_256;environment.sky=sky
+	environment.ambient_light_source=Environment.AMBIENT_SOURCE_COLOR;environment.ambient_light_color=Color("adbed1");environment.ambient_light_energy=0.42
+	environment.background_energy_multiplier=0.45
+	environment.reflected_light_source=Environment.REFLECTION_SOURCE_SKY
 	environment.tonemap_mode=Environment.TONE_MAPPER_FILMIC;environment.tonemap_exposure=0.9
-	environment.fog_enabled=true;environment.fog_light_color=Color("637882");environment.fog_density=0.0018;environment.fog_sky_affect=0.45
+	environment.fog_enabled=true;environment.fog_light_color=Color("637882");environment.fog_density=0.0013;environment.fog_sky_affect=0.45
 	var env=WorldEnvironment.new();env.environment=environment;add_child(env)
-	sun=DirectionalLight3D.new();sun.rotation_degrees=Vector3(-28,-45,0);sun.light_color=Color("ffd4aa");sun.light_energy=0.25;sun.shadow_enabled=Profile.shadows;sun.directional_shadow_max_distance=90;sun.directional_shadow_mode=DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS;add_child(sun)
+	sun=DirectionalLight3D.new();sun.rotation_degrees=Vector3(-28,-45,0);sun.light_color=Color("dfc4b4");sun.light_energy=0.32;sun.shadow_enabled=Profile.shadows;sun.directional_shadow_max_distance=90;sun.directional_shadow_mode=DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS;add_child(sun)
 	get_viewport().msaa_3d=Viewport.MSAA_2X if Profile.shadows else Viewport.MSAA_DISABLED
-	box(self,Vector3(450,0.5,450),Vector3(0,-0.4,0),Color("25484b"))
-	var ground=box(self,Vector3(158,0.15,126),Vector3(0,-0.06,0),Color("263740"))
-	var shader=Shader.new();shader.code="shader_type spatial; uniform bool wet=false; void fragment(){ vec2 p=UV*vec2(158.,126.); float n=fract(sin(dot(floor(p*24.),vec2(12.9898,78.233)))*43758.5453); ALBEDO=mix(vec3(.13,.18,.21),vec3(.20,.25,.27),n*.35); ROUGHNESS=wet?.32:.9; METALLIC=wet?.2:0.; }"
-	asphalt=ShaderMaterial.new();asphalt.shader=shader;ground.material_override=asphalt
+	box(self,Vector3(650,0.5,560),Vector3(-105,-0.5,0),Color("344d42"))
+	var ground=detailed(self,Vector3(394,0.15,302),Vector3(-14,-0.06,0),"asphalt_02",0.18)
+	asphalt=ground.material_override
+	_build_water()
 	# Pavements, raised curbs and road paint establish a readable street network.
 	for x in [-28.0,28.0]:
 		for z in [-19.0,19.0]:
 			box(self,Vector3(46,0.24,28),Vector3(x,0.04,z),Color("819193"))
 			box(self,Vector3(43.8,0.04,25.8),Vector3(x,0.18,z),Color("6e8083"))
-	for z in [-38.0,0.0,38.0]:
-		for x in range(-74,76,6):
-			if absf(x)<6 or absf(absf(x)-56)<6: continue
+	for z in Layout.ROAD_Z:
+		for x in range(-206,179,6):
+			if absf(fposmod(x+28,56)-28)<6: continue
 			box(self,Vector3(2.8,0.025,0.13),Vector3(x,0.035,z),Color("d2bd84"))
-	for x in [-56.0,0.0,56.0]:
-		for z in range(-56,59,6):
-			if absf(z)<6 or absf(absf(z)-38)<6: continue
+	for x in Layout.ROAD_X:
+		for z in range(-146,147,6):
+			if absf(fposmod(z+19,38)-19)<6: continue
 			box(self,Vector3(0.13,0.025,2.8),Vector3(x,0.04,z),Color("d2bd84"))
-		for z in [-38.0,0.0,38.0]:
+		for z in [-114.0,-38.0,38.0,114.0]:
 			for offset in [-7.0,7.0]:
 				for stripe in range(-3,4): box(self,Vector3(0.65,0.026,2.2),Vector3(x+stripe,0.035,z+offset),Color("c0c8c0"))
 	for building in Layout.BUILDINGS:
 		var rect:Rect2=building[1];var center=rect.get_center();var h:float=building[2]
 		box(self,Vector3(rect.size.x+1,0.2,rect.size.y+1),Vector3(center.x,0.03,center.y),Color("99a49c"))
-		var facade=asset(self,"city-kit-commercial",building[0]+".glb",Vector3(center.x,0.13,center.y),Vector3(rect.size.x,h,rect.size.y))
+		var facade=asset(self,building[4] if building.size()>4 else "city-kit-commercial",building[0]+".glb",Vector3(center.x,0.13,center.y),Vector3(rect.size.x,h,rect.size.y))
 		var palette=[Color("72909b"),Color("b89483"),Color("818e8b"),Color("b2a18d"),Color("7895a5")]
 		for mesh in facade.get_child(0).get_children():
 			if mesh is MeshInstance3D:
 				var mat=mesh.get_active_material(0).duplicate();mat.albedo_color=palette[absi(int(center.x+center.y))%5];mesh.material_override=mat
+		# Real material detail on the plinth; original model windows and roof remain intact.
+		for side in [-1.0,1.0]:
+			detailed(self,Vector3(rect.size.x,2.8,0.12),Vector3(center.x,1.5,center.y+side*rect.size.y/2),"brick_wall_003",0.22)
+			detailed(self,Vector3(0.12,2.8,rect.size.y),Vector3(center.x+side*rect.size.x/2,1.5,center.y),"brick_wall_003",0.22)
+		detailed(self,Vector3(rect.size.x+3,0.09,rect.size.y+3),Vector3(center.x,0.08,center.y),"brick_pavement",0.2)
 		# Additional illuminated storefront at the visible entrance.
 		var front=rect.end.y+0.12 if center.y<0 else rect.position.y-0.12
 		var facing=0.0 if center.y<0 else PI
@@ -131,9 +161,10 @@ func _build_city() -> void:
 		light(self,Vector3(center.x,3.3,front+(2 if center.y<0 else -2)),GOLD,1.4,10)
 	# Skyline is decorative, outside the playable map.
 	for i in range(18):
-		var angle=i*TAU/18;var pos=Vector3(sin(angle)*145,0,cos(angle)*135)
-		asset(self,"city-kit-commercial","building-skyscraper-a.glb",pos,Vector3(12,24+i%5*8,12))
+		var angle=i*TAU/18;var pos=Vector3(sin(angle)*330,0,cos(angle)*290)
+		var tower=asset(self,"city-kit-commercial","building-skyscraper-a.glb",pos,Vector3(12,24+i%5*8,12));cull(tower,540)
 	_build_garage()
+	_build_districts()
 	for x in [-51.0,5.0,51.0]:
 		for z in [-33.0,6.0,33.0]:
 			cylinder(self,0.1,5.8,Vector3(x,2.9,z),Color("253c45"))
@@ -170,9 +201,9 @@ func _build_city() -> void:
 	var gm=ShaderMaterial.new();gm.shader=grading;screen.material=gm
 
 func _build_garage() -> void:
-	box(self,Vector3(26,0.12,22),Vector3(-37.5,0.18,20),Color("777d78"))
+	detailed(self,Vector3(26,0.12,22),Vector3(-37.5,0.18,20),"concrete_floor_worn_02",0.22)
 	for wall in Layout.GARAGE_WALLS:
-		box(self,Vector3(wall.size.x,4.8,wall.size.y),Vector3(wall.get_center().x,2.4,wall.get_center().y),Color("42626b"))
+		detailed(self,Vector3(wall.size.x,4.8,wall.size.y),Vector3(wall.get_center().x,2.4,wall.get_center().y),"brick_wall_003",0.22)
 	# Open front and high clerestory keep the playable interior visible to the camera.
 	box(self,Vector3(25.5,0.3,2.5),Vector3(-37.5,4.8,10),Color("253b48"))
 	box(self,Vector3(25.5,0.6,0.5),Vector3(-37.5,4.6,20),Color("234a53"))
@@ -214,21 +245,27 @@ func _character(parent: Node3D, variant: int) -> Node3D:
 	var player=AnimationPlayer.new();model.add_child(player);player.add_animation_library("",animation_library);player.play("idle")
 	parent.set_meta("animation",player)
 	return character
-func _vehicle(parent: Node3D) -> void:
+func _vehicle(parent: Node3D, vid: String="van_01") -> void:
+	var body=Node3D.new();parent.add_child(body)
+	var spec=World.FLEET[vid]
+	body.scale=Vector3(float(spec.width)/2.5,0.82 if vid=="courier_02" else (1.2 if vid=="truck_03" else 1.0),float(spec.length)/5.4)
+	parent=body
+	var paint=Color("d18343") if vid=="courier_02" else (Color("596b94") if vid=="truck_03" else TEAL)
 	var base=asset(parent,"car-kit","delivery-flat.glb",Vector3.ZERO,Vector3(2.5,2.0,5.4));base.name="Chassis"
 	box(parent,Vector3(2.45,0.15,3.1),Vector3(0,0.9,-0.9),Color("3a4b54"))
-	for x in [-1.2,1.2]:box(parent,Vector3(0.12,1.9,3.0),Vector3(x,1.9,-0.95),TEAL)
-	box(parent,Vector3(2.5,0.16,3.1),Vector3(0,2.85,-0.95),TEAL)
-	box(parent,Vector3(2.45,1.9,0.12),Vector3(0,1.9,0.6),TEAL)
+	for x in [-1.2,1.2]:box(parent,Vector3(0.12,1.9,3.0),Vector3(x,1.9,-0.95),paint)
+	box(parent,Vector3(2.5,0.16,3.1),Vector3(0,2.85,-0.95),paint)
+	box(parent,Vector3(2.45,1.9,0.12),Vector3(0,1.9,0.6),paint)
 	for side in [-1,1]:
 		var pivot=Node3D.new();pivot.name="RearLeft" if side<0 else "RearRight";parent.add_child(pivot);pivot.position=Vector3(side*1.2,1.9,-2.48)
-		box(pivot,Vector3(1.18,1.9,0.12),Vector3(-side*0.59,0,0),TEAL)
+		box(pivot,Vector3(1.18,1.9,0.12),Vector3(-side*0.59,0,0),paint)
 		box(pivot,Vector3(0.05,0.4,0.05),Vector3(-side*1.06,-0.05,-0.09),Color("b7c6bd"))
 		box(parent,Vector3(0.25,0.15,0.05),Vector3(side*0.92,0.85,-2.65),Color("ff5543"),1.8)
-		var logo=label3(parent,"AH / COURIER",Vector3(side*1.28,2.15,-0.8),38,GOLD);logo.rotation.y=side*PI/2
+		var logo=label3(parent,"AH / "+("EXPRESS" if vid=="courier_02" else "CARGO" if vid=="truck_03" else "COURIER"),Vector3(side*1.28,2.15,-0.8),38,GOLD);logo.rotation.y=side*PI/2
 		light(parent,Vector3(side*0.8,1,2.6),Color("ffdfad"),0.7,7)
 	label3(parent,"AH  024",Vector3(0,0.72,-2.76),22,Color("f6e6c1")).rotation.y=PI
 func _parcel(parent: Node3D, kind: String) -> void:
+	var hint=label3(parent,"ЗАКАЗ [E]",Vector3(0,1.5,0),21,GOLD,true);hint.name="PickupHint"
 	var large=kind=="heavy"
 	box(parent,Vector3(1.5,0.85,0.9) if large else Vector3(0.65,0.6,0.55),Vector3(0,0.45 if large else 0.32,0),Color("b48b5b"))
 	box(parent,Vector3(0.13,0.012,0.91 if large else 0.56),Vector3(0,0.89 if large else 0.627,0),Color("e2c38b"))
@@ -247,7 +284,7 @@ func _input(event: InputEvent) -> void:
 		yaw-=event.relative.x*0.006;elevation=clampf(elevation+event.relative.y*0.003,0.25,1.1)
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index==MOUSE_BUTTON_WHEEL_UP: distance=maxf(6,distance-1)
-		if event.button_index==MOUSE_BUTTON_WHEEL_DOWN: distance=minf(24,distance+1)
+		if event.button_index==MOUSE_BUTTON_WHEEL_DOWN: distance=minf(30,distance+1)
 func movement(axis: Vector2) -> Vector2:
 	return axis.rotated(-yaw)
 func _process(dt: float) -> void:
@@ -264,7 +301,7 @@ func _process(dt: float) -> void:
 					"players", "npcs":
 						_character(n,abs(id.hash()))
 						if domain=="players":label3(n,record.nickname,Vector3(0,2.4,0),26,Color("c5efde"),true)
-					"vehicles": _vehicle(n)
+					"vehicles": _vehicle(n,id)
 					"items": _parcel(n,record.kind)
 					"police":asset(n,"car-kit","police.glb",Vector3.ZERO,Vector3(2,1.7,4.3))
 			var n:Node3D=entities[key]
@@ -273,13 +310,15 @@ func _process(dt: float) -> void:
 			if domain=="players": n.visible=record.connected and record.alive and record.vehicle==""
 			if domain=="items":
 				n.visible=not record.delivered
+				n.get_node("PickupHint").visible=record.holder=="" and record.container==""
 				if record.holder!="":
 					var p=s.players[record.holder];target_yaw=p.yaw
 					target=World.vec(p.pos)+Vector3(0,0.8 if record.kind!="heavy" else 0.0,0.9).rotated(Vector3.UP,target_yaw)
 					n.visible=n.visible and p.connected
 				elif record.container!="":
 					var v=s.vehicles[record.container];var idx=v.cargo.find(id)
-					target_yaw=v.yaw;target=World.vec(v.pos)+Vector3(-0.48+(idx%2)*0.96,1.0+floori(idx/6.0)*0.65,-1.8+(idx%6/2)*0.75).rotated(Vector3.UP,target_yaw)
+					var spec=World.vehicle_spec(v)
+					target_yaw=v.yaw;target=World.vec(v.pos)+Vector3(-0.48+(idx%2)*0.96,0.95+floori(idx/6.0)*0.5,(-1.8+(idx%6/2)*0.75)*float(spec.length)/5.4).rotated(Vector3.UP,target_yaw)
 					# Roof is faded out while accessing the cargo through its open doors.
 					n.visible=n.visible and v.door_open
 			var speed=n.position.distance_to(target)/maxf(dt,0.001)
@@ -292,16 +331,19 @@ func _process(dt: float) -> void:
 				anim.speed_scale=clampf(speed/4,0.45,1.35) if wanted=="run" else 1.0
 			if domain=="vehicles":
 				for side in [-1,1]:
-					var door=n.get_node("RearLeft" if side<0 else "RearRight")
+					var door=n.get_child(0).get_node("RearLeft" if side<0 else "RearRight")
 					door.rotation.y=lerp_angle(door.rotation.y,side*2.15 if record.door_open else 0.0,dt*8)
-				for wheel in n.get_node("Chassis").get_child(0).get_children():
+				for wheel in n.get_child(0).get_node("Chassis").get_child(0).get_children():
 					if str(wheel.name).begins_with("wheel"): wheel.rotation.x+=float(record.speed)*dt*1.2
 	for key in entities.keys():
 		if not live.has(key): entities[key].queue_free();entities.erase(key)
 	gate.position.y=lerpf(gate.position.y,4.3 if s.doors.gate_01.open else 1.5,dt*4)
 	gate.scale.y=lerpf(gate.scale.y,0.12 if s.doors.gate_01.open else 1.0,dt*4)
 	roadworks.visible=s.economy.weather.road_closed;garage_extension.visible=int(s.economy.company.garage)>0
-	asphalt.set_shader_parameter("wet",s.economy.weather.rain)
+	asphalt.roughness=0.32 if s.economy.weather.rain else 1.0
+	asphalt.metallic=0.22 if s.economy.weather.rain else 0.0
+	asphalt.albedo_color=Color("556d7b") if s.economy.weather.rain else Color("818b93")
+	_update_activities(s)
 	for d in Layout.DESTINATIONS:
 		var needed=false
 		for o in s.orders.values():
@@ -319,7 +361,7 @@ func _process(dt: float) -> void:
 			var occluded=false
 			for b in Layout.BUILDINGS:
 				if candidate.y<float(b[2])+0.5 and b[1].grow(0.25).has_point(Vector2(candidate.x,candidate.z)):occluded=true;break
-			for wall in Layout.GARAGE_WALLS:
+			for wall in Layout.GARAGE_WALLS+Layout.WORKSHOP_WALLS+Layout.DEALER_WALLS:
 				if candidate.y<5.1 and wall.grow(0.3).has_point(Vector2(candidate.x,candidate.z)):occluded=true
 			if candidate.y>3.9 and candidate.y<5.2 and Rect2(-50,19.4,25,1.2).has_point(Vector2(candidate.x,candidate.z)):occluded=true
 			if occluded:desired=focus.lerp(desired,maxf(0.08,(step-1)/30.0));break
@@ -331,3 +373,112 @@ func _process(dt: float) -> void:
 		for i in range(rain.multimesh.instance_count):
 			var pos=focus+Vector3(fposmod(i*7.21,32)-16,14-fposmod(elapsed*14+i*0.83,16),fposmod(i*3.71,32)-16)
 			rain.multimesh.set_instance_transform(i,Transform3D(Basis(Vector3.FORWARD,0.18),pos))
+
+func _lamp(pos: Vector3) -> void:
+	var n=Node3D.new();add_child(n);n.position=pos
+	cylinder(n,0.085,6.8,Vector3(0,3.4,0),Color("293e49"))
+	box(n,Vector3(1.8,0.12,0.12),Vector3(0.8,6.7,0),Color("344d59"))
+	box(n,Vector3(0.8,0.1,0.4),Vector3(1.3,6.65,0),GOLD,2)
+	light(n,Vector3(1.3,6.35,0),Color("ffe0b6"),2.4,17)
+	cull(n,130)
+func _build_water() -> void:
+	var water=box(self,Vector3(350,0.12,650),Vector3(358,-0.26,0),Color("345767"))
+	var sh=Shader.new();sh.code="shader_type spatial; varying vec3 world_pos; void vertex(){world_pos=(MODEL_MATRIX*vec4(VERTEX,1.0)).xyz;VERTEX.y+=sin(world_pos.x*.7+TIME*.9)*.04+sin(world_pos.z*.43-TIME*1.2)*.025;} void fragment(){float waves=sin(world_pos.x*1.6+TIME*1.2+sin(world_pos.z*.45))*sin(world_pos.z*.65-TIME*.5); ALBEDO=mix(vec3(.035,.09,.13),vec3(.14,.28,.32),waves*.5+.5);ROUGHNESS=.19;METALLIC=.65;NORMAL_MAP=normalize(vec3(waves*.12,.12*sin(world_pos.x+TIME),1.))*0.5+0.5;}"
+	var m=ShaderMaterial.new();m.shader=sh;water.material_override=m
+	for pier in Layout.PIERS:
+		detailed(self,Vector3(pier.size.x,0.6,pier.size.y),Vector3(pier.get_center().x,-0.23,pier.get_center().y),"concrete_floor_worn_02",0.22)
+		for x in range(184,209,6):
+			for z in [-3.5,3.5]:
+				cylinder(self,0.16,1.0,Vector3(x,0.5,pier.get_center().y+z),Color("293f47"))
+	for z in range(-144,146,12):
+		if absf(fposmod(z+19,38)-19)<6:continue
+		box(self,Vector3(0.3,1.15,6),Vector3(182,0.6,z),Color("50656b"))
+		box(self,Vector3(0.45,0.14,6),Vector3(182,1.22,z),Color("a7b4b4"))
+	# Two moored boats, with hull, cabin, rails and mast.
+	for z in [-60.0,67.0]:
+		var boat=Node3D.new();add_child(boat);boat.position=Vector3(201,-0.22,z)
+		box(boat,Vector3(8,1.5,19),Vector3(0,0.2,0),Color("264856"))
+		box(boat,Vector3(7.5,0.2,18),Vector3(0,1.0,0),Color("9ea39b"))
+		box(boat,Vector3(5.5,3.4,6),Vector3(0,2.75,3),Color("d2cab4"))
+		box(boat,Vector3(5.7,1.1,0.12),Vector3(0,3.0,6.1),Color("2d566c"))
+		cylinder(boat,0.09,8,Vector3(0,6,2),Color("c5c2b2"))
+		light(boat,Vector3(0,4,6),GOLD,1.5,15)
+		cull(boat,280)
+func _build_districts() -> void:
+	# Streets remain open: buildings, destinations and collision share WorldLayout.
+	for x in [-174.0,-106.0,106.0,174.0]:
+		for z in [-108.0,-32.0,44.0,120.0]:_lamp(Vector3(x,0,z))
+	for x in [-62.0,50.0]:
+		for z in [-108.0,82.0,120.0]:_lamp(Vector3(x,0,z))
+	# Northern public garden, paths, planted beds, benches and a fountain.
+	box(self,Vector3(108,0.2,24),Vector3(0,0.08,-95),Color("395d48"))
+	detailed(self,Vector3(109,0.05,3),Vector3(0,0.22,-94),"brick_pavement",0.2)
+	for x in range(-46,51,12):
+		for z in [-105.0,-84.0]:asset(self,"city-kit-suburban","tree-large.glb",Vector3(x,0.16,z),Vector3(5.4,8.2,5.4))
+		box(self,Vector3(2.3,0.16,0.7),Vector3(x,0.8,-98),Color("966f50"))
+		box(self,Vector3(2.3,0.6,0.12),Vector3(x,1.1,-98.3),Color("966f50"))
+	cylinder(self,4,0.5,Vector3(22,0.25,-94),Color("7d9393"))
+	cylinder(self,3.5,0.12,Vector3(22,0.57,-94),Color("77b9bd"),0.2)
+	cylinder(self,0.4,3.2,Vector3(22,1.6,-94),Color("a7b7ae"))
+	label3(self,"NORTH GARDENS",Vector3(-2,3,-79),54,GOLD,true)
+	# Residential trees, hedges, mailboxes and garden fences.
+	for b in Layout.BUILDINGS:
+		if b.size()<5 or b[4]!="city-kit-suburban":continue
+		var r:Rect2=b[1]
+		for offset in [-3.0,3.0]:
+			asset(self,"city-kit-suburban","tree-small.glb",Vector3(r.get_center().x+offset*3,0,r.end.y+3),Vector3(3,4.5,3))
+		box(self,Vector3(0.8,0.65,0.4),Vector3(r.get_center().x+5,1.3,r.end.y+1.8),Color("9d7563"))
+		for x in range(int(r.position.x),int(r.end.x),2):box(self,Vector3(1.8,0.6,0.25),Vector3(x,0.5,r.position.y-1),Color("819b8b"))
+	# Enterable, roofless workshops keep third-person camera and controls legible.
+	for walls in [Layout.WORKSHOP_WALLS,Layout.DEALER_WALLS]:
+		for wall in walls:detailed(self,Vector3(wall.size.x,4.6,wall.size.y),Vector3(wall.get_center().x,2.3,wall.get_center().y),"brick_wall_003",0.22)
+	detailed(self,Vector3(32,0.15,22),Vector3(84,0.03,96),"concrete_floor_worn_02",0.22)
+	detailed(self,Vector3(31,0.15,22),Vector3(-144,0.03,58),"concrete_floor_worn_02",0.22)
+	label3(self,"ATLAS / GARAGE & PARTS",Vector3(84,4.3,85.6),62,GOLD)
+	label3(self,"WESTERN MOTORS / AUTOPARK",Vector3(-144,4.3,46.6),56,GOLD)
+	for pos in [Layout.WORKSHOP,Layout.DEALER]:
+		box(self,Vector3(1.6,0.9,0.7),pos+Vector3(0,0.5,-1.2),Color("365c67"))
+		box(self,Vector3(0.9,0.55,0.06),pos+Vector3(0,1.35,-1.2),Color("6adccc"),1)
+		label3(self,"[E] ТЕРМИНАЛ",pos+Vector3(0,2.4,-1.2),27,GOLD,true)
+		light(self,pos+Vector3(0,4,0),Color("b4e3df"),2,18)
+	for i in range(3):asset(self,"factory-kit","machine.glb",Vector3(72+i*4,0,88),Vector3(2.5,2.6,2))
+	asset(self,"factory-kit","conveyor-long.glb",Vector3(95,0,93),Vector3(2,0.9,6))
+	asset(self,"factory-kit","box-large.glb",Vector3(95,0.9,94),Vector3(1,1,1))
+	asset(self,"factory-kit","catwalk-stairs.glb",Vector3(97,0,88),Vector3(2,2.8,4))
+	# Docks and industrial landmarks.
+	for i in range(12):
+		var x=158 if i<6 else 175;var z=-135+(i%6)*22.0
+		asset(self,"city-kit-industrial","shipping-container-"+("a" if i%2==0 else "b")+".glb",Vector3(x,0,z),Vector3(3.1,2.9,8))
+	for x in [-141.0,-84.0,139.0]:
+		asset(self,"city-kit-industrial","chimney-large.glb",Vector3(x,10.0,135),Vector3(3.5,15,3.5))
+	asset(self,"city-kit-industrial","water-tower.glb",Vector3(-188,10,133),Vector3(8,13,8))
+	asset(self,"city-kit-industrial","detail-tank-large.glb",Vector3(-137,12,92),Vector3(9,5,8))
+	for z in [-95.0,90.0]:
+		for x in [176.0,182.0]:box(self,Vector3(0.55,17,0.55),Vector3(x,8.5,z),Color("b18b58"))
+		box(self,Vector3(31,0.8,1),Vector3(188,17,z),Color("c59d62"))
+		cylinder(self,0.06,12,Vector3(201,11,z),Color("33434b"))
+	# Static activity scenery. Only the tiny state changes are replicated.
+	for aid in preview.activities:
+		var a=preview.activities[aid];var n=Node3D.new();add_child(n);n.position=World.vec(a.pos);activity_nodes[aid]=n
+		if a.kind=="parts":
+			box(n,Vector3(0.9,0.65,0.7),Vector3(0,0.35,0),Color("577e73"))
+			box(n,Vector3(0.92,0.09,0.72),Vector3(0,0.72,0),Color("97c9af"))
+			label3(n,"ДЕТАЛИ [E]",Vector3(0,1.8,0),23,Color("9bf4cf"),true)
+		else:
+			asset(n,"car-kit","sedan.glb",Vector3.ZERO,Vector3(2.0,1.6,4.3))
+			for x in [-1.3,1.3]:asset(n,"car-kit","cone.glb",Vector3(x,0,-3),Vector3(0.5,0.7,0.5))
+			label3(n,"ПОМОЩЬ [E] / $420",Vector3(0,3,0),25,GOLD,true)
+		cull(n,70)
+	for sid in World.STAFF:
+		var n=Node3D.new();add_child(n);n.position=Vector3(89,0,89) if sid=="mechanic" else Vector3(-39,0,16);staff_nodes[sid]=n
+	# Building-animation resources are loaded afterwards in _ready.
+func _update_activities(s: Dictionary) -> void:
+	for aid in activity_nodes:
+		var n:Node3D=activity_nodes[aid];var a=s.activities[aid]
+		n.visible=a.status!="completed"
+		if a.kind=="parts":n.rotation.y=sin(elapsed*0.7)*0.13
+	for sid in staff_nodes:
+		var n:Node3D=staff_nodes[sid]
+		if n.get_child_count()==0:
+			_character(n,2 if sid=="mechanic" else 0);label3(n,World.STAFF[sid].name,Vector3(0,2.5,0),25,Color("9bf4cf"),true)
+		n.visible=s.employees[sid].hired

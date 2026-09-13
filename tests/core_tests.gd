@@ -19,7 +19,7 @@ func deliver(w:WorldState,oid:String) -> void:
 func _ready() -> void:call_deferred("run")
 func run() -> void:
 	var w=World.new();w.create_world();w.join_player("a","Alice");w.join_player("b","Bob")
-	check(w.data.orders.size()==10 and w.data.items.is_empty(),"Contracts exist before cargo spawns")
+	check(w.data.orders.size()==30 and w.data.items.is_empty(),"Contracts exist before cargo spawns")
 	var balance=w.data.economy.company.balance
 	check(not w.command("a","add_money","99999").is_empty() and w.data.economy.company.balance==balance,"Client cannot mint money")
 	var o=accept(w,1);var iid=o.item
@@ -129,8 +129,68 @@ func run() -> void:
 	legacy.data.items={"parcel_01":{"pos":[1,0,1],"holder":"a","delivered":false}}
 	legacy.data.orders={"order_01":{"item":"parcel_01","reward":250,"status":"open","completed_by":""}}
 	var migrated=World.new();migrated.load_world(legacy.data)
-	check(migrated.data.format==2 and migrated.data.world_id==legacy.data.world_id and migrated.data.players.a.money==875,"Migration preserves legacy identity and wallet")
+	check(migrated.data.format==3 and migrated.data.world_id==legacy.data.world_id and migrated.data.players.a.money==875,"Migration preserves legacy identity and wallet")
 	migrated.join_player("a","Legacy");at(migrated,"a",World.DELIVERY)
 	check(migrated.command("a","complete_order","order_01").is_empty() and migrated.data.players.a.inventory.is_empty(),"Legacy carried parcel remains deliverable after migration")
+	# Expanded city: every destination, collectible and service point is reachable on foot.
+	var city=World.new();city.create_world();city.join_player("a","Alice");city.join_player("b","Bob")
+	for dest in World.Layout.DESTINATIONS:check(not city.blocked(World.vec(dest.pos),0.4),"Destination is outside authoritative walls: "+dest.name)
+	for pos in World.PART_SPOTS+World.SERVICE_SPOTS:check(not city.blocked(pos,0.4),"Activity location is reachable")
+	check(city.blocked(Vector3(190,0,60),0.4) and not city.blocked(Vector3(199,0,38),0.4),"Harbor water is blocked but its pier is traversable")
+	check(not city.command("a","collect_parts","parts_00").is_empty(),"Remote collectible rejected")
+	at(city,"a",World.PART_SPOTS[0]);check(city.command("a","collect_parts","parts_00").is_empty(),"Collect parts at landmark")
+	at(city,"b",World.PART_SPOTS[0]);check(not city.command("b","collect_parts","parts_00").is_empty() and city.data.economy.company.parts==2,"Collect race cannot duplicate shared parts")
+	at(city,"a",World.SERVICE_SPOTS[0]);at(city,"b",World.SERVICE_SPOTS[0])
+	check(city.command("a","service_start","service_00").is_empty(),"Roadside service reserves a job")
+	check(not city.command("b","service_start","service_00").is_empty(),"Second worker cannot take reserved service")
+	check(not city.command("a","service_finish","service_00").is_empty(),"Repair cannot bypass its server timer")
+	city.data.time+=7;check(not city.command("b","service_finish","service_00").is_empty(),"Only assigned worker finishes service")
+	var budget=city.data.economy.company.balance
+	check(city.command("a","service_finish","service_00").is_empty() and city.data.economy.company.parts==1 and city.data.economy.company.balance==budget+420,"Service consumes one part and pays once")
+	check(not city.command("a","service_finish","service_00").is_empty() and city.data.economy.company.balance==budget+420,"Repeated repair payment rejected")
+	at(city,"a",World.SERVICE_SPOTS[1]);city.command("a","service_start","service_01");at(city,"a",World.SPAWN);city.advance(1.1,{})
+	check(city.data.activities.service_01.status=="available" and city.data.economy.company.parts==1,"Leaving service releases reservation without consuming parts")
+	city.data.economy.company.balance=20000;city.data.economy.company.reputation=10
+	check(not city.command("a","buy_vehicle","courier_02").is_empty(),"Remote vehicle purchase rejected")
+	at(city,"a",World.Layout.DEALER);budget=city.data.economy.company.balance
+	check(city.command("a","buy_vehicle","courier_02").is_empty() and city.data.vehicles.courier_02.owned and city.data.economy.company.balance==budget-2200,"Purchase adds usable second vehicle")
+	check(not city.command("b","vehicle","truck_03").is_empty(),"Unpurchased truck cannot be driven")
+	check(not city.command("a","buy_vehicle","courier_02").is_empty(),"Duplicate fleet purchase rejected")
+	var car=city.data.vehicles.courier_02
+	at(city,"a",World.vec(car.pos));check(city.command("a","vehicle","courier_02").is_empty(),"Player boards purchased vehicle")
+	at(city,"b",World.vec(city.data.vehicles.van_01.pos));city.command("b","vehicle","van_01")
+	var cstart=car.pos.duplicate();var vstart=city.data.vehicles.van_01.pos.duplicate();city.advance(0.1,{"a":Vector2(0,-1)})
+	check(car.pos!=cstart and city.data.vehicles.van_01.pos==vstart and city.data.players.a.pos==car.pos,"Driver input and seated position apply to assigned vehicle only")
+	city.exit_vehicle("a",true);city.exit_vehicle("b",true)
+	city.command("a","accept_order","d001_01");var cargo=city.data.orders.d001_01.item
+	at(city,"a",World.vec(city.data.items[cargo].pos));city.command("a","pickup",cargo)
+	at(city,"a",World.rear(car));city.command("a","cargo_door","courier_02");city.command("a","load","courier_02")
+	check(car.cargo==[cargo] and city.data.items[cargo].container=="courier_02" and city.data.vehicles.van_01.cargo.is_empty(),"Each vehicle has independent authoritative cargo")
+	city.command("a","unload",cargo);at(city,"a",World.DELIVERY);city.command("a","complete_order","d001_01")
+	check(city.data.orders.d001_01.status=="completed","Cargo from second vehicle can complete a delivery")
+	at(city,"a",World.Layout.GARAGE);budget=city.data.economy.company.balance
+	check(city.command("a","claim_chapter","0").is_empty() and city.data.economy.company.chapter==1 and city.data.economy.company.balance==budget+300,"First campaign chapter awards validated progress")
+	check(not city.command("a","claim_chapter","0").is_empty() and not city.command("a","claim_chapter","1").is_empty(),"Campaign cannot replay reward or skip requirements")
+	check(city.command("a","hire","dispatcher").is_empty() and World.max_orders(city.data)==4,"Hired dispatcher adds two active contracts")
+	check(not city.command("a","hire","dispatcher").is_empty(),"Repeated employee hire rejected")
+	city.command("a","end_shift","");city.command("a","next_shift","")
+	check(city.data.activities.parts_00.status=="completed" and city.data.activities.service_00.status=="available" and city.data.economy.company.repairs==1,"New shift preserves exploration and resets road calls")
+	check(Saves.write(root,"City03",city.data).is_empty(),"Expanded world saves")
+	var city_save=Saves.read_world(root,"City03")
+	check(city_save.ok and city_save.world.vehicles.courier_02.owned and city_save.world.economy.company.chapter==1 and city_save.world.employees.dispatcher.hired,"Fleet, campaign and staff survive host save")
+	car.door_open=false;at(city,"a",World.vec(car.pos));city.command("a","vehicle","courier_02")
+	Saves.write(root,"Seated03",city.data)
+	var seated_save=Saves.read_world(root,"Seated03");var seated=World.new();seated.load_world(seated_save.world);seated.join_player("a","Alice")
+	check(seated.data.players.a.vehicle=="" and not seated.blocked_walk(World.vec(seated.data.players.a.pos)),"Saving inside a vehicle reloads the courier at a walkable exit")
+	var exit_pos=World.vec(seated.data.players.a.pos);seated.advance(0.1,{"a":Vector2(1,0)})
+	check(World.vec(seated.data.players.a.pos)!=exit_pos,"Reconnected courier can move after disembarking from saved vehicle")
+	# A real v0.2 payload gains content additively, retaining an accepted job and its cargo.
+	var old2=World.new();old2.create_world();old2.join_player("a","Old player");old2.command("a","accept_order","d001_01")
+	old2.data.format=2;old2.data.erase("activities");old2.data.vehicles.erase("courier_02");old2.data.vehicles.erase("truck_03");old2.data.employees={}
+	for extra in ["parts","discovered","repairs","chapter","engine","insurance"]:old2.data.economy.company.erase(extra)
+	old2.data.economy.company.balance=1234
+	var expanded=World.new();expanded.load_world(old2.data)
+	check(expanded.data.world_id==old2.data.world_id and expanded.data.economy.company.balance==1234 and expanded.data.orders.d001_01.status=="active" and expanded.data.items.has("cargo_d001_01"),"V0.2 migration preserves ID, company budget, accepted job and parcel")
+	check(expanded.data.vehicles.size()==3 and expanded.data.activities.size()==15 and Saves.valid_world(expanded.data),"Migration adds fleet and activities as a valid current world")
 	print("CORE TESTS: %d passed / %d total"%[checks-failures.size(),checks])
 	get_tree().quit(0 if failures.is_empty() else 1)

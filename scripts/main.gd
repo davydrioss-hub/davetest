@@ -25,6 +25,9 @@ var tablet_page = ""
 var last_message = ""
 var last_money = -1
 var brake_sent = false
+var waypoint_name = ""
+var waypoint_pos = Vector3.ZERO
+var navigation_label: Label
 
 func _ready() -> void:
 	get_tree().auto_accept_quit = false
@@ -148,13 +151,13 @@ func _shell(kicker: String, title: String, subtitle: String = "") -> VBoxContain
 	gap.custom_minimum_size.y = 6
 	column.add_child(gap)
 	_label(screen, "PRIVATE CO-OP  /  01", 15, ACCENT).position = Vector2(1115, 44)
-	_label(screen, "LAN + DIRECT IP    /    WINDOWS    /    NIGHT SHIFT 0.2", 12, MUTED).position = Vector2(825, 850)
+	_label(screen, "LAN + DIRECT IP    /    WINDOWS    /    CITY EXPANSION 0.3", 12, MUTED).position = Vector2(825, 850)
 	return column
 
 func _show_main() -> void:
 	current_menu = "main"
 	var col = _shell("THE LAST SHIFT IS YOURS.", "AFTER\nHOURS", "Вечерний город. Своя компания. Ваша команда.")
-	_label(col, "CO-OP DELIVERY / NIGHT SHIFT", 12, ACCENT)
+	_label(col, "ПЯТЬ РАЙОНОВ / ОДНА КОМПАНИЯ", 12, ACCENT)
 	_button(col, "PLAY                                   →", _show_play, true)
 	_button(col, "SETTINGS", _show_settings)
 	_button(col, "EXIT", _quit)
@@ -277,6 +280,7 @@ func _enter_game() -> void:
 	var interaction=PanelContainer.new();interaction.position=Vector2(330,780);interaction.custom_minimum_size=Vector2(780,0);interaction.add_theme_stylebox_override("panel",_style(Color(0.04,0.09,0.12,0.94)));hud.add_child(interaction)
 	prompt_label=_label(interaction,"",18,ACCENT);prompt_label.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
 	_label(hud,"WASD  ДВИЖЕНИЕ    ПКМ  КАМЕРА    E  ДЕЙСТВИЕ    F  ГРУЗ    TAB  КОНТРАКТЫ    M  КАРТА    ESC  МЕНЮ",13,PAPER).position=Vector2(230,860)
+	navigation_label=_label(hud,"",17,ACCENT);navigation_label.position=Vector2(465,32);navigation_label.size=Vector2(555,90);navigation_label.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;navigation_label.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;navigation_label.add_theme_stylebox_override("normal",_style(Color(0.04,0.09,0.12,0.88)))
 	_update_hud()
 	_notify("Ваша компания готова. Нажмите Tab, выберите первый заказ. Груз появится у гаража.")
 
@@ -311,7 +315,7 @@ func _open_tablet(page:String="jobs") -> void:
 	tablet=PanelContainer.new();tablet.position=Vector2(210,110);tablet.size=Vector2(1020,650);tablet.add_theme_stylebox_override("panel",_style(Color("112b37"),1,Color("496672")));ui.add_child(tablet)
 	var col=VBoxContainer.new();tablet.add_child(col)
 	var nav=HBoxContainer.new();col.add_child(nav)
-	for tab in [["jobs","Контракты"],["map","Карта"],["cargo","Багажник"],["garage","Компания"],["help","Помощь"]]:
+	for tab in [["jobs","Заказы"],["map","Карта"],["cargo","Груз"],["garage","Бизнес"],["fleet","Автопарк"],["city","Город"],["help","Помощь"]]:
 		var b=_button(nav,tab[1],_open_tablet.bind(tab[0]),page==tab[0]);b.custom_minimum_size.y=40;b.add_theme_font_size_override("font_size",15)
 	_button(nav,"×",_close_tablet).custom_minimum_size.y=40
 	var scroll=ScrollContainer.new();scroll.custom_minimum_size=Vector2(970,550);scroll.size_flags_vertical=Control.SIZE_EXPAND_FILL;col.add_child(scroll)
@@ -320,7 +324,7 @@ func _open_tablet(page:String="jobs") -> void:
 	match page:
 		"jobs":
 			_label(body,"КОНТРАКТЫ  /  ГРУЗЫ В ГАРАЖЕ",24,ACCENT)
-			_label(body,"Одновременно: %d. Примите заказ, затем заберите коробку с погрузочной площадки."%[2+int(company.garage)*2],15,MUTED)
+			_label(body,"Одновременно: %d. Примите заказ, затем заберите коробку с погрузочной площадки."%[World.max_orders(s)],15,MUTED)
 			for oid in s.orders:
 				var o=s.orders[oid]
 				if o.status in ["completed","failed"]:continue
@@ -328,18 +332,20 @@ func _open_tablet(page:String="jobs") -> void:
 				var row=HBoxContainer.new();body.add_child(row)
 				var text="%s  ·  %s  ·  до $%d"%[o.title,dest.name,o.reward]
 				if o.status=="active":text="● "+text+"  /  в работе"
-				var l=_label(row,text,16);l.size_flags_horizontal=Control.SIZE_EXPAND_FILL
+				var l=_label(row,text,16);l.size_flags_horizontal=Control.SIZE_EXPAND_FILL;l.custom_minimum_size.x=620;l.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART
 				if o.status=="available":
 					var b=_button(row,"ПРИНЯТЬ",_request.bind("accept_order",oid));b.disabled=int(company.reputation)<int(o.required_rep) or s.economy.shift.status!="active"
-					if b.disabled:b.text="Репутация 2" if s.economy.shift.status=="active" else "Смена закрыта"
+					if b.disabled:b.text="Репутация %d"%o.required_rep if s.economy.shift.status=="active" else "Смена закрыта"
 				else:_button(row,"МАРШРУТ",func():Session.request("ping",oid);_open_tablet("map"))
 			_label(body,"Срочный: 3 минуты. Хрупкий: берегите от ударов. Тяжёлый: 3 места в багажнике.\nНесколько адресов: отметьте груз на каждом пункте. Оплата поступает после последнего.",15,MUTED)
 		"map":
-			_label(body,"РАЙОН / ЖЁЛТЫЕ МЕТКИ — АКТИВНЫЕ ДОСТАВКИ",19,ACCENT)
-			body.add_child(load("res://scripts/map_view.gd").new())
+			_label(body,"ГОРОД / НАЖМИТЕ НА МЕТКУ, ЧТОБЫ ПОСТАВИТЬ ЦЕЛЬ",19,ACCENT)
+			_label(body,"Золото: заказы · Зелёный: детали · Оранжевый: помощь · Синий: ваш автопарк",14,MUTED)
+			var map=load("res://scripts/map_view.gd").new();body.add_child(map)
+			map.chosen.connect(func(title:String,pos:Vector3):waypoint_name=title;waypoint_pos=pos;_close_tablet();_notify("Цель: "+title))
 		"cargo":
-			var v=s.vehicles.van_01
-			_label(body,"ФУРГОН / 4 МЕСТА / %d ЯЧЕЕК ГРУЗА"%v.capacity,23,ACCENT)
+			var v=s.vehicles[World.vehicle_near(s,p)]
+			_label(body,"%s / %d МЕСТ / %d ЯЧЕЕК"%[World.vehicle_spec(v).name,World.vehicle_spec(v).seats,v.capacity],23,ACCENT)
 			_label(body,"Для действий подойдите к задней двери. Откройте её клавишей E.\nВыберите коробку для разгрузки; доставляйте её получателю в руках.",16,MUTED)
 			for iid in v.cargo:
 				var item=s.items[iid];var row=HBoxContainer.new();body.add_child(row)
@@ -351,12 +357,25 @@ func _open_tablet(page:String="jobs") -> void:
 			_label(body,"Состояние фургона: %d%%  /  Топливо: %d%%"%[int(v.health),int(v.fuel)],17,ACCENT)
 		"garage":
 			_label(body,"КОМПАНИЯ  /  $%d  /  РЕПУТАЦИЯ %d"%[company.balance,company.reputation],23,ACCENT)
+			var chapter=int(company.chapter)
+			if chapter<World.CHAPTERS.size():
+				var goal=World.CHAPTERS[chapter]
+				_label(body,"ГЛАВА %d / %s"%[chapter+1,goal.title],21)
+				_label(body,goal.hint+" · Награда $%d"%goal.reward,16,MUTED)
+				var claim=_button(body,"ПОЛУЧИТЬ НАГРАДУ У ТЕРМИНАЛА",_request.bind("claim_chapter",str(chapter)),World.chapter_ready(s));claim.disabled=not World.chapter_ready(s)
+			else:_label(body,"ИСТОРИЯ КОМПАНИИ ЗАВЕРШЕНА. ГОРОД ЖДЁТ НОВЫХ СМЕН.",18,ACCENT)
+			_label(body,"Доставки: %d · Находки: %d/12 · Помощь водителям: %d · Детали: %d"%[company.total_deliveries,company.discovered,company.repairs,company.parts],16,MUTED)
 			var role=HBoxContainer.new();body.add_child(role)
 			for title in ["Курьер","Водитель","Грузчик","Диспетчер"]:_button(role,title,_request.bind("role",title),p.role==title).add_theme_font_size_override("font_size",14)
-			for up in [["capacity","Вместимость: 6 → 10 ячеек"],["equipment","Автоматические крепления груза"],["garage","Расширение: 2 → 4 активных заказа"]]:
+			for up in [["capacity","Вместимость: 6 → 10 ячеек"],["equipment","Автоматические крепления груза"],["garage","Расширение: 2 → 4 активных заказа"],["engine","Двигатели автопарка: скорость +18%"],["insurance","Защита кузова: урон от столкновений −35%"]]:
 				var installed=int(company[up[0]])>0
 				var b=_button(body,up[1]+("  /  УСТАНОВЛЕНО" if installed else "  /  $%d"%World.UPGRADE_PRICES[up[0]]),_request.bind("upgrade",up[0]));b.disabled=installed
-			_button(body,"РЕМОНТ И ЗАПРАВКА / НА ПЛОЩАДКЕ ГАРАЖА",_request.bind("repair"))
+			_label(body,"СОТРУДНИКИ / НАЙМ В ГАРАЖЕ",20,ACCENT)
+			for sid in World.STAFF:
+				var staff=World.STAFF[sid];var hired=s.employees[sid].hired
+				var b=_button(body,staff.name+(" / В КОМАНДЕ" if hired else " / $%d"%staff.price),_request.bind("hire",sid));b.disabled=hired
+				_label(body,("Скидка на сервис 35%; постепенно ремонтирует машины в мастерской." if sid=="mechanic" else "+2 активных заказа и +20% времени на новые доставки.")+" Зарплата: $90 за смену.",14,MUTED)
+			_button(body,"РЕМОНТ И ЗАПРАВКА / НА СЕРВИСНОЙ ПЛОЩАДКЕ",_request.bind("repair"))
 			var shift=s.economy.shift
 			if shift.status=="finished":
 				var r=shift.report
@@ -365,19 +384,50 @@ func _open_tablet(page:String="jobs") -> void:
 				if Session.is_host:_button(body,"СЛЕДУЮЩАЯ СМЕНА / У ТЕРМИНАЛА",_request.bind("next_shift"),true)
 			elif Session.is_host:_button(body,"ЗАВЕРШИТЬ СМЕНУ / У ТЕРМИНАЛА",func():_open_tablet("confirm"))
 			_label(body,"Роли помогают договориться с друзьями. Каждый может выполнять любую работу.",14,MUTED)
+		"fleet":
+			_label(body,"АВТОПАРК / %d МАШИНЫ КОМПАНИИ"%World.owned_count(s),24,ACCENT)
+			_label(body,"Новые машины продаются в Western Motors на западе. Каждая имеет свой багажник.
+Покупка общая для команды. Цветной прямоугольник на карте показывает машину.",16,MUTED)
+			_button(body,"НАВИГАЦИЯ К АВТОСАЛОНУ",func():waypoint_name="Western Motors";waypoint_pos=World.Layout.DEALER;_close_tablet())
+			for vid in World.FLEET:
+				var spec=World.FLEET[vid];var v=s.vehicles[vid]
+				_label(body,"%s / %d мест / %d ячеек / до %d км/ч"%[spec.name,spec.seats,v.capacity,int(spec.top*3.6)],20)
+				if v.owned:
+					var row=HBoxContainer.new();body.add_child(row)
+					_button(row,"НАЙТИ МАШИНУ",func():waypoint_name=spec.name;waypoint_pos=World.vec(v.pos);_close_tablet())
+					if Session.is_host:_button(row,"ЭВАКУАЦИЯ",_request.bind("tow",vid))
+					_label(body,"Кузов %d%% · Топливо %d%% · В багажнике %d грузов"%[int(v.health),int(v.fuel),v.cargo.size()],15,MUTED)
+				else:
+					var b=_button(body,"КУПИТЬ ЗА $%d / РЕПУТАЦИЯ %d"%[spec.price,spec.rep],_request.bind("buy_vehicle",vid));b.disabled=company.balance<spec.price or company.reputation<spec.rep
+		"city":
+			_label(body,"ГОРОДСКИЕ ЗАНЯТИЯ / ДЕТАЛИ: %d"%company.parts,24,ACCENT)
+			_label(body,"Исследуйте районы, собирайте детали и помогайте водителям.
+Ремонт: подойдите к машине, E начать, оставайтесь рядом 6 секунд, E закончить.
+Один ремонт расходует 1 деталь и приносит $420. Новые вызовы — каждую смену.",17,MUTED)
+			_button(body,"НАЙТИ МАСТЕРСКУЮ",func():waypoint_name="Atlas / Мастерская";waypoint_pos=World.Layout.WORKSHOP;_close_tablet())
+			_button(body,"КУПИТЬ 3 ДЕТАЛИ / $180 / У ТЕРМИНАЛА МАСТЕРСКОЙ",_request.bind("buy_parts"))
+			_button(body,"СЕРВИС БЛИЖАЙШЕЙ МАШИНЫ / В МАСТЕРСКОЙ",_request.bind("repair"))
+			_label(body,"Находки %d/12 · Выполнено дорожных вызовов: %d"%[company.discovered,company.repairs],18,ACCENT)
+			for aid in s.activities:
+				var a=s.activities[aid]
+				if a.kind!="service":continue
+				var state_title="ВЫПОЛНЕН" if a.status=="completed" else "В РАБОТЕ" if a.status=="working" else "ДОСТУПЕН"
+				var row=HBoxContainer.new();body.add_child(row)
+				var l=_label(row,"%s / %s / %s"%[a.title,World.Layout.district(World.vec(a.pos)),state_title],15);l.size_flags_horizontal=Control.SIZE_EXPAND_FILL
+				_button(row,"НАЙТИ",func():waypoint_name=a.title;waypoint_pos=World.vec(a.pos);_close_tablet())
 		"confirm":
 			_label(body,"Завершить текущую смену?",28,ACCENT)
-			_label(body,"Незаконченные заказы будут закрыты без оплаты.\nВ отчёт войдут расходы на обслуживание: до $80.",18)
+			_label(body,"Незаконченные заказы будут закрыты без оплаты.\nВ отчёт войдут обслуживание ($80) и зарплаты сотрудников ($90 за каждого).",18)
 			_button(body,"ДА, ПОДВЕСТИ ИТОГИ",func():_request("end_shift");_open_tablet("garage"),true)
 			_button(body,"ПРОДОЛЖИТЬ РАБОТУ",_close_tablet)
 		"help":
 			_label(body,"ПЕРВАЯ ДОСТАВКА",26,ACCENT)
 			_label(body,"1. Примите обычный заказ на вкладке «Контракты».\n2. Возьмите коробку у гаража: подойдите и нажмите E.\n3. У задней двери фургона: E открыть, F загрузить, G закрепить.\n4. Закройте багажник (E), подойдите сбоку и сядьте (E).\n5. Найдите адрес на карте (M), довезите груз. Пробел — тормоз.\n6. Остановитесь, выйдите (E), откройте багажник сзади.\n7. F — взять коробку; у жёлтой метки F — завершить доставку.\n8. Прибыль поступит компании. Улучшения покупаются в гараже.",18)
-			_label(body,"ПКМ + мышь — поворот камеры. Колесо — расстояние.\nТяжёлый груз: E у друга, чтобы нести вдвоём; Q — поставить.\nВ одиночку доступна медленная тележка. R — возрождение.\nЗастряли или закончился бензин? Выйдите и вызовите эвакуатор: Esc.\nПауза и планшет не останавливают общую смену. Хост сохраняет мир F5.",16,MUTED)
+			_label(body,"Кампания: вкладка «Бизнес». Карта: нажмите метку для навигации.\nДетали: зелёные ящики. Вызовы: «Город». Машины: «Автопарк».\nПКМ + мышь — поворот камеры. Колесо — расстояние.\nТяжёлый груз: E у друга, чтобы нести вдвоём; Q — поставить.\nВ одиночку доступна медленная тележка. R — возрождение.\nЗастряли или закончился бензин? Выйдите и вызовите эвакуатор: Esc.\nПауза и планшет не останавливают общую смену. Хост сохраняет мир F5.",16,MUTED)
 
 func nearest() -> Dictionary:
 	if not Session.active:return {}
-	var s=Session.state();var p=s.players[Profile.player_id];var pos=World.vec(p.pos);var v=s.vehicles.van_01
+	var s=Session.state();var p=s.players[Profile.player_id];var pos=World.vec(p.pos);var vid=World.vehicle_near(s,p);var v=s.vehicles[vid]
 	if not p.alive:return {"action":"respawn","id":"","label":"[R] ВОЗРОЖДЕНИЕ"}
 	if p.vehicle!="":return {"action":"vehicle","id":p.vehicle,"label":"[E] ВЫЙТИ · WASD РУЛЬ · ПРОБЕЛ ТОРМОЗ · [M] КАРТА" if v.driver==Profile.player_id else "ПАССАЖИР · [E] ВЫЙТИ · [M] КАРТА"}
 	var carry=World.held(p,s)
@@ -385,7 +435,7 @@ func nearest() -> Dictionary:
 		var o=s.orders[oid]
 		if o.status=="active" and carry==o.item and pos.distance_to(World.vec(World.destination(o).pos))<3.5:return {"action":"complete_order","id":oid,"label":"[F] ПЕРЕДАТЬ ГРУЗ · "+World.destination(o).name}
 	if pos.distance_to(World.rear(v))<3.4:
-		return {"action":"cargo_door","id":"van_01","label":"[E] "+("ЗАКРЫТЬ" if v.door_open else "ОТКРЫТЬ")+" БАГАЖНИК · [F] "+("ЗАГРУЗИТЬ" if carry!="" else "ВЗЯТЬ ГРУЗ")+" · [G] КРЕПЛЕНИЯ"}
+		return {"action":"cargo_door","id":vid,"label":"[E] "+("ЗАКРЫТЬ" if v.door_open else "ОТКРЫТЬ")+" БАГАЖНИК · [F] "+("ЗАГРУЗИТЬ" if carry!="" else "ВЗЯТЬ ГРУЗ")+" · [G] КРЕПЛЕНИЯ"}
 	var best=3.1;var result={}
 	if carry=="":
 		for iid in s.items:
@@ -396,7 +446,17 @@ func nearest() -> Dictionary:
 			var d=pos.distance_to(at)
 			if d<best:best=d;result={"action":"pickup","id":iid,"label":"[E] "+("ПОМОЧЬ НЕСТИ" if item.holder!="" else "ВЗЯТЬ")+" · "+World.TYPE_NAMES[item.kind]}
 	if not result.is_empty():return result
-	if pos.distance_to(World.vec(v.pos))<4.2:return {"action":"vehicle","id":"van_01","label":"[E] СЕСТЬ В ФУРГОН / %d ИЗ 4 МЕСТ"%v.passengers.size()}
+	if pos.distance_to(World.vec(v.pos))<4.2:return {"action":"vehicle","id":vid,"label":"[E] "+World.vehicle_spec(v).name+" / %d ИЗ %d МЕСТ"%[v.passengers.size(),World.vehicle_spec(v).seats]}
+	for aid in s.activities:
+		var a=s.activities[aid]
+		if a.status=="completed" or pos.distance_to(World.vec(a.pos))>3:continue
+		if a.kind=="parts":return {"action":"collect_parts","id":aid,"label":"[E] ЗАБРАТЬ ДЕТАЛИ · +2 В ЗАПАС КОМПАНИИ"}
+		if a.status=="working":
+			if a.worker!=Profile.player_id:return {"action":"","id":"","label":"ДРУГОЙ ИГРОК РЕМОНТИРУЕТ МАШИНУ"}
+			return {"action":"service_finish","id":aid,"label":"[E] ЗАВЕРШИТЬ РЕМОНТ · $420" if s.time>=a.finish_at else "РЕМОНТ · %d СЕК · ОСТАВАЙТЕСЬ РЯДОМ"%ceili(a.finish_at-s.time)}
+		return {"action":"service_start","id":aid,"label":"[E] ПОМОЧЬ ВОДИТЕЛЮ · 1 ДЕТАЛЬ · $420"}
+	if pos.distance_to(World.Layout.DEALER)<5:return {"action":"tablet","id":"fleet","label":"[E] АВТОСАЛОН · НОВЫЕ МАШИНЫ"}
+	if pos.distance_to(World.Layout.WORKSHOP)<5:return {"action":"tablet","id":"city","label":"[E] МАСТЕРСКАЯ · СЕРВИС И ЗАПЧАСТИ"}
 	if pos.distance_to(World.Layout.GARAGE)<3.2:return {"action":"tablet","id":"garage","label":"[E] ТЕРМИНАЛ · КОМПАНИЯ И УЛУЧШЕНИЯ"}
 	if pos.distance_to(World.Layout.REPAIR)<3.0:return {"action":"repair","id":"","label":"[E] РЕМОНТ И ЗАПРАВКА ФУРГОНА"}
 	if pos.distance_to(World.vec(s.doors.gate_01.pos))<2.5:return {"action":"door","id":"gate_01","label":"[E] ВОРОТА ГАРАЖА"}
@@ -424,12 +484,12 @@ func _unhandled_key_input(event:InputEvent) -> void:
 	match event.physical_keycode:
 		KEY_E:
 			if target.get("action")=="tablet":_open_tablet(target.id)
-			elif not target.is_empty() and target.action!="complete_order":_request(target.action,target.id)
+			elif not target.is_empty() and not target.action in ["complete_order",""]:_request(target.action,target.id)
 		KEY_F:
 			if target.get("action")=="complete_order":_request(target.action,target.id)
-			elif World.vec(p.pos).distance_to(World.rear(s.vehicles.van_01))<3.6:
+			elif World.vec(p.pos).distance_to(World.rear(s.vehicles[World.vehicle_near(s,p)]))<3.6:
 				if carry!="":_request("load")
-				elif s.vehicles.van_01.cargo.size()==1:_request("unload",s.vehicles.van_01.cargo[0])
+				elif s.vehicles[World.vehicle_near(s,p)].cargo.size()==1:_request("unload",s.vehicles[World.vehicle_near(s,p)].cargo[0])
 				else:_open_tablet("cargo")
 		KEY_G:_request("secure")
 		KEY_Q:
@@ -455,12 +515,12 @@ func _process(dt:float) -> void:
 		var brake=Input.is_physical_key_pressed(KEY_SPACE) or paused or is_instance_valid(tablet)
 		if brake!=brake_sent:
 			brake_sent=brake
-			if p.vehicle!="" and Session.state().vehicles.van_01.driver==Profile.player_id:Session.request("brake","on" if brake else "off")
+			if p.vehicle!="" and Session.state().vehicles[p.vehicle].driver==Profile.player_id:Session.request("brake","on" if brake else "off")
 		Session.send_movement(axis)
 	if hud_timer>=0.1:hud_timer=0;_update_hud()
 func _update_hud() -> void:
 	if not is_instance_valid(hud) or not Session.active:return
-	var s=Session.state();var p=s.players[Profile.player_id];var v=s.vehicles.van_01;var shift=s.economy.shift;var company=s.economy.company
+	var s=Session.state();var p=s.players[Profile.player_id];var v=s.vehicles[World.vehicle_near(s,p)];var shift=s.economy.shift;var company=s.economy.company
 	var count=0
 	for player in s.players.values():
 		if player.connected:count+=1
@@ -471,6 +531,7 @@ func _update_hud() -> void:
 	if carry!="":inventory_label.text+="\nВ РУКАХ: "+World.TYPE_NAMES[s.items[carry].kind]+" · %d%%"%int(s.items[carry].condition)
 	if p.vehicle!="":inventory_label.text+="\n%02d км/ч  ·  Топливо %d%%  ·  Кузов %d%%"%[int(absf(v.speed)*3.6),int(v.fuel),int(v.health)]
 	objective_label.text="ПРИБЫЛЬ: $%d / $%d\n"%[shift.income-shift.expenses,shift.target]
+	if int(company.chapter)<World.CHAPTERS.size():objective_label.text+="Глава %d: %s\n"%[int(company.chapter)+1,World.CHAPTERS[int(company.chapter)].title]
 	var active=0
 	for o in s.orders.values():
 		if o.status!="active":continue
@@ -480,10 +541,25 @@ func _update_hud() -> void:
 		if o.kind=="urgent":objective_label.text+="Осталось: %d сек\n"%maxi(0,int(o.deadline-s.time))
 	if active==0:objective_label.text+="\n[TAB] Принять новый заказ\n[M] Карта района"
 	if shift.status=="finished":objective_label.text="СМЕНА ЗАВЕРШЕНА\n\n[TAB] → Компания → Отчёт\nВернитесь к терминалу гаража."
+	var direction_target=waypoint_pos;var direction_title=waypoint_name
+	if direction_title.is_empty():
+		for o in s.orders.values():
+			if o.status=="active":
+				direction_target=World.vec(World.destination(o).pos);direction_title=World.destination(o).name
+				var item=s.items[o.item]
+				if item.holder=="" and item.container=="":direction_target=World.vec(item.pos);direction_title="Забрать груз"
+				break
+	if direction_title!="":
+		var delta=direction_target-World.vec(p.pos)
+		var angle=wrapf(atan2(delta.x,-delta.z)+view.yaw,-PI,PI)
+		var arrows=["↑","↗","→","↘","↓","↙","←","↖"]
+		navigation_label.text=World.Layout.district(World.vec(p.pos))+"\n"+arrows[posmod(roundi(angle/(PI/4)),8)]+"  "+direction_title+"  ·  %d м"%int(delta.length())
+		if delta.length()<4 and waypoint_name!="":waypoint_name=""
+	else:navigation_label.text=World.Layout.district(World.vec(p.pos))+"\n[M] Выберите цель на карте"
 	var target=nearest()
 	prompt_label.text=target.get("label","[TAB] КОНТРАКТЫ  ·  [M] КАРТА  ·  [Q] ПОЛОЖИТЬ ГРУЗ" if carry!="" else "[TAB] КОНТРАКТЫ  ·  [M] КАРТА  ·  ПКМ ПОВОРОТ КАМЕРЫ")
 	if not p.alive:prompt_label.text="[R] ВОЗРОДИТЬСЯ" if s.time>=p.dead_until else "ВОЗРОЖДЕНИЕ ЧЕРЕЗ %d"%ceili(p.dead_until-s.time)
-	if last_money>=0 and int(company.balance)>last_money:_notify("Доставка выполнена! На счёт компании поступило $%d."%(int(company.balance)-last_money))
+	if last_money>=0 and int(company.balance)>last_money:_notify("На счёт компании поступило $%d."%(int(company.balance)-last_money))
 	last_money=int(company.balance)
 	if s.economy.weather.message!=last_message:
 		last_message=s.economy.weather.message;_notify(last_message)

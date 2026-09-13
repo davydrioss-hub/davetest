@@ -5,7 +5,7 @@ signal ended(reason: String)
 signal notice(message: String)
 signal state_changed
 
-const PROTOCOL = 2
+const PROTOCOL = 3
 const DEFAULT_PORT = 27020
 const MAX_PLAYERS = 8
 const World = preload("res://scripts/world_state.gd")

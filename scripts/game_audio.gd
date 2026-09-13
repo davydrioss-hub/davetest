@@ -10,6 +10,10 @@ var step_clock=0.0
 var last_position=Vector3.ZERO
 var last_balance=-1
 var last_horn=-1
+var track="night_routes"
+var next_track="night_routes"
+var music_fade=1.0
+var track_clock=0.0
 func tone(kind:String,seconds:float,loop:bool=false) -> AudioStreamWAV:
 	var rate=22050;var count=int(seconds*rate);var bytes=PackedByteArray();bytes.resize(count*2)
 	var rng=RandomNumberGenerator.new();rng.seed=83
@@ -31,16 +35,24 @@ func player(kind:String,seconds:float,loop:bool=false) -> AudioStreamPlayer:
 	var p=AudioStreamPlayer.new();p.stream=tone(kind,seconds,loop);add_child(p);return p
 func _ready() -> void:
 	engine=player("engine",1,true);engine.volume_db=-40;engine.play()
-	ambience=player("ambience",6,true);ambience.volume_db=-24;ambience.play()
+	ambience=AudioStreamPlayer.new();add_child(ambience);_play_track(track);ambience.volume_db=-24
 	rain=player("rain",2,true);rain.volume_db=-60;rain.play()
 	foot=player("foot",0.12);foot.volume_db=-22
 	chime=player("chime",0.35);chime.volume_db=-14
 	horn=player("horn",0.6);horn.volume_db=-12
 func _process(dt:float) -> void:
 	AudioServer.set_bus_volume_db(0,linear_to_db(maxf(0.0001,Profile.volume)))
-	ambience.volume_db=linear_to_db(maxf(0.0001,Profile.music*0.3))
+	track_clock+=dt
+	if next_track!=track:
+		music_fade=maxf(0,music_fade-dt)
+		if music_fade<=0:_play_track(next_track);track_clock=0
+	else:music_fade=minf(1,music_fade+dt*0.7)
+	ambience.volume_db=linear_to_db(maxf(0.0001,Profile.music*0.65*music_fade))
 	if not Session.active:engine.volume_db=-60;rain.volume_db=-60;last_balance=-1;return
-	var s=Session.state();var p=s.players[Profile.player_id];var v=s.vehicles.van_01
+	var s=Session.state();var p=s.players[Profile.player_id];var v=s.vehicles[WorldState.vehicle_near(s,p)]
+	if track_clock>8:
+		var district=WorldLayout.district(WorldState.vec(p.pos))
+		next_track="harbor_lights" if district=="ВОСТОЧНЫЙ ПОРТ" else "late_factory" if district=="ПРОМЫШЛЕННАЯ ЗОНА" else "pine_gardens" if district in ["СОСНОВЫЙ КВАРТАЛ","СЕВЕРНЫЙ ПАРК"] else "night_routes"
 	engine.pitch_scale=0.72+absf(v.speed)*0.075
 	var near=clampf(1-WorldState.vec(p.pos).distance_to(WorldState.vec(v.pos))/23,0,1)
 	engine.volume_db=linear_to_db(maxf(0.0001,near*(0.07 if v.driver!="" else 0.0)))
@@ -53,3 +65,8 @@ func _process(dt:float) -> void:
 	if int(v.get("horn_tick",-1))>last_horn:
 		last_horn=int(v.horn_tick)
 		if near>0:horn.play()
+
+func _play_track(name: String) -> void:
+	track=name
+	var music=load("res://assets/audio/"+name+".ogg") as AudioStreamOggVorbis
+	music.loop=true;ambience.stream=music;ambience.play()

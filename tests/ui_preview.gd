@@ -44,6 +44,15 @@ func _ready() -> void:
 	await capture(directory,"city")
 	model.patch("economy","weather",{"rain":true,"road_closed":true})
 	await capture(directory,"rain")
+	model.patch("economy","weather",{"rain":false,"road_closed":false})
+	for page in ["fleet","city"]:
+		main.call("_open_tablet",page)
+		await capture(directory,page+"-tablet")
+	main.call("_close_tablet")
+	for place in [["harbor",[179.0,0.0,38.0],-1.4],["park",[-12.0,0.0,-94.0],0.4],["industry",[83.0,0.0,111.0],0.5],["dealer",[-143.0,0.0,67.0],0.1],["residential",[-187.0,0.0,-78.0],0.5]]:
+		model.patch("players",Profile.player_id,{"pos":place[1]})
+		main.view.yaw=place[2];main.view.distance=17;main.view.elevation=0.45
+		await capture(directory,place[0])
 	Session.leave()
 	await get_tree().process_frame
 	get_tree().quit()

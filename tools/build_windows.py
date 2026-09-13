@@ -1,6 +1,7 @@
 """Reproducible Godot 4.4.1 Windows export. Python standard library only."""
 from __future__ import annotations
 import argparse, io, json, os, pathlib, platform, re, shutil, subprocess, urllib.request, zipfile
+from prepare_assets import prepare_assets
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 VERSION = '4.4.1-stable'
@@ -33,6 +34,7 @@ class RemoteZip(io.RawIOBase):
         return content
 
 def prepare(godot=None, template=None):
+    prepare_assets()
     CACHE.mkdir(exist_ok=True)
     if godot:
         executable = pathlib.Path(shutil.which(godot) or godot).resolve()
@@ -103,4 +105,3 @@ if __name__ == '__main__':
     args = parser.parse_args()
     executable = prepare(args.godot, args.template)
     if not args.prepare_only: build(executable)
-

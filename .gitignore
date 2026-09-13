@@ -9,4 +9,4 @@ identity.key
 profile.cfg
 tests/last_network_result.json
 __pycache__/
-
+assets/hd/

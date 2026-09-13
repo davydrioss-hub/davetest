@@ -5,7 +5,7 @@ config_version=5
 config/name="After Hours"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.4", "GL Compatibility")
-config/description="After Hours: Night Shift. Cooperative deliveries in a small evening city."
+config/description="After Hours: City Expansion. Five districts, three vehicles and a shared courier company."
 
 [autoload]
 Profile="*res://scripts/profile.gd"
