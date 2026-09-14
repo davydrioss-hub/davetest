@@ -1,6 +1,8 @@
 extends Node
 const World = preload("res://scripts/world_state.gd")
-const View = preload("res://scripts/world_view.gd")
+const Navigation=preload("res://scripts/navigation.gd")
+const Driving=preload("res://scripts/driving.gd")
+const View = preload("res://scripts/night_drive_view.gd")
 const Saves = preload("res://scripts/save_store.gd")
 const INK = Color("17272c")
 const PAPER = Color("ebe9df")
@@ -28,12 +30,20 @@ var brake_sent = false
 var waypoint_name = ""
 var waypoint_pos = Vector3.ZERO
 var navigation_label: Label
+var radio_label: Label
+var indicators_label: Label
+var audio: Node
+var route=PackedVector3Array()
+var route_origin=Vector3.INF
+var route_goal=Vector3.INF
+var route_closed=false
+var brake_vehicle=""
 
 func _ready() -> void:
 	get_tree().auto_accept_quit = false
 	view = View.new()
 	add_child(view)
-	add_child(load("res://scripts/game_audio.gd").new())
+	audio=load("res://scripts/game_audio.gd").new();add_child(audio)
 	var canvas = CanvasLayer.new()
 	add_child(canvas)
 	ui = Control.new()
@@ -151,7 +161,7 @@ func _shell(kicker: String, title: String, subtitle: String = "") -> VBoxContain
 	gap.custom_minimum_size.y = 6
 	column.add_child(gap)
 	_label(screen, "PRIVATE CO-OP  /  01", 15, ACCENT).position = Vector2(1115, 44)
-	_label(screen, "LAN + DIRECT IP    /    WINDOWS    /    CITY EXPANSION 0.3", 12, MUTED).position = Vector2(825, 850)
+	_label(screen, "LAN + DIRECT IP    /    WINDOWS    /    NIGHT DRIVE 0.4", 12, MUTED).position = Vector2(825, 850)
 	return column
 
 func _show_main() -> void:
@@ -248,20 +258,27 @@ func _show_connecting() -> void:
 
 func _show_settings() -> void:
 	var col = _shell("SETTINGS", "Настройки.")
+	col.add_theme_constant_override("separation",5)
 	var nick = _field(col,"Nickname",Profile.nickname); nick.max_length=24
 	var full=CheckButton.new(); full.text="Полный экран"; full.button_pressed=Profile.fullscreen;col.add_child(full)
 	var shadow=CheckButton.new();shadow.text="Тени и сглаживание";shadow.button_pressed=Profile.shadows;col.add_child(shadow)
+	_label(col,"Чувствительность мыши",14,MUTED)
+	var sensitivity=HSlider.new();sensitivity.min_value=.0008;sensitivity.max_value=.006;sensitivity.step=.0001;sensitivity.value=Profile.sensitivity;col.add_child(sensitivity)
+	_label(col,"Угол обзора (60–100°)",14,MUTED)
+	var fov=HSlider.new();fov.min_value=60;fov.max_value=100;fov.step=1;fov.value=Profile.fov;col.add_child(fov)
+	var bob=CheckButton.new();bob.text="Покачивание камеры";bob.button_pressed=Profile.head_bob;col.add_child(bob)
 	_label(col,"Громкость",14,MUTED)
 	var volume=HSlider.new();volume.max_value=1;volume.step=0.05;volume.value=Profile.volume;col.add_child(volume)
 	_label(col,"Музыка",14,MUTED)
 	var music=HSlider.new();music.max_value=1;music.step=0.05;music.value=Profile.music;col.add_child(music)
-	_label(col,"WASD · Движение / руль    ПКМ · Камера\nE · Действие    F · Груз    G · Крепления\nTab · Планшет    M · Карта    Q · Положить\nПробел · Тормоз    H · Сигнал    Esc · Меню",16,MUTED)
+	_label(col,"WASD / стрелки · Движение / руль\nE · Действие    F · Груз    G · Крепления\nTab · Планшет    M · Карта    Q · Положить\nПробел · Тормоз    H · Сигнал    Esc · Меню",16,MUTED)
 	_button(col,"СОХРАНИТЬ",func():
 		if nick.text.strip_edges().is_empty(): _notify("Введите имя.");return
 		Profile.nickname=nick.text.strip_edges();Profile.fullscreen=full.button_pressed
 		Profile.volume=volume.value;Profile.music=music.value;Profile.shadows=shadow.button_pressed
+		Profile.sensitivity=sensitivity.value;Profile.fov=fov.value;Profile.head_bob=bob.button_pressed
 		Profile.apply_display();view.sun.shadow_enabled=Profile.shadows
-		get_viewport().msaa_3d=Viewport.MSAA_2X if Profile.shadows else Viewport.MSAA_DISABLED
+		get_viewport().msaa_3d=Viewport.MSAA_4X if Profile.shadows else Viewport.MSAA_DISABLED
 		if Profile.save_profile()!=OK:_notify("Не удалось сохранить настройки.");return
 		_show_main(),true)
 	_button(col,"← НАЗАД",_show_main)
@@ -277,10 +294,13 @@ func _enter_game() -> void:
 	inventory_label=_label(info,"",14,MUTED)
 	var objectives=PanelContainer.new();objectives.position=Vector2(1080,22);objectives.custom_minimum_size=Vector2(336,0);objectives.add_theme_stylebox_override("panel",_style(Color(0.04,0.09,0.12,0.92)));hud.add_child(objectives)
 	objective_label=_label(objectives,"",15)
-	var interaction=PanelContainer.new();interaction.position=Vector2(330,780);interaction.custom_minimum_size=Vector2(780,0);interaction.add_theme_stylebox_override("panel",_style(Color(0.04,0.09,0.12,0.94)));hud.add_child(interaction)
+	var interaction=PanelContainer.new();interaction.position=Vector2(250,818);interaction.custom_minimum_size=Vector2(940,0);interaction.add_theme_stylebox_override("panel",_style(Color(0.04,0.09,0.12,0.94)));hud.add_child(interaction)
 	prompt_label=_label(interaction,"",18,ACCENT);prompt_label.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
-	_label(hud,"WASD  ДВИЖЕНИЕ    ПКМ  КАМЕРА    E  ДЕЙСТВИЕ    F  ГРУЗ    TAB  КОНТРАКТЫ    M  КАРТА    ESC  МЕНЮ",13,PAPER).position=Vector2(230,860)
+	_label(hud,"WASD / СТРЕЛКИ  ДВИЖЕНИЕ    МЫШЬ  ОБЗОР    E  ДЕЙСТВИЕ    F  ГРУЗ    TAB  ПЛАНШЕТ    ESC  МЕНЮ",13,PAPER).position=Vector2(230,860)
 	navigation_label=_label(hud,"",17,ACCENT);navigation_label.position=Vector2(465,32);navigation_label.size=Vector2(555,90);navigation_label.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER;navigation_label.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;navigation_label.add_theme_stylebox_override("normal",_style(Color(0.04,0.09,0.12,0.88)))
+	var crosshair=_label(hud,"·",32,Color(.9,1,.94,.8));crosshair.position=Vector2(706,425);crosshair.size=Vector2(28,35);crosshair.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
+	radio_label=_label(hud,"",13,MUTED);radio_label.position=Vector2(28,725);radio_label.size=Vector2(430,48)
+	indicators_label=_label(hud,"",24,Color("7ae3ac"));indicators_label.position=Vector2(620,660);indicators_label.size=Vector2(200,40);indicators_label.horizontal_alignment=HORIZONTAL_ALIGNMENT_CENTER
 	_update_hud()
 	_notify("Ваша компания готова. Нажмите Tab, выберите первый заказ. Груз появится у гаража.")
 
@@ -299,7 +319,7 @@ func _resume() -> void:
 	paused=false
 	if screen:screen.queue_free();screen=null
 func _notify(message:String) -> void:
-	if not is_instance_valid(toast):toast=_label(ui,"",16,ACCENT);toast.position=Vector2(245,690);toast.size=Vector2(950,65);toast.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;toast.add_theme_stylebox_override("normal",_style(Color(0.04,0.09,0.12,0.94)))
+	if not is_instance_valid(toast):toast=_label(ui,"",16,ACCENT);toast.position=Vector2(245,192);toast.size=Vector2(950,65);toast.autowrap_mode=TextServer.AUTOWRAP_WORD_SMART;toast.add_theme_stylebox_override("normal",_style(Color(0.04,0.09,0.12,0.94)))
 	toast.text=message;toast.move_to_front();toast_timer=7.0
 func _request(action:String,target:String="") -> void:
 	Session.request(action,target)
@@ -341,7 +361,7 @@ func _open_tablet(page:String="jobs") -> void:
 		"map":
 			_label(body,"ГОРОД / НАЖМИТЕ НА МЕТКУ, ЧТОБЫ ПОСТАВИТЬ ЦЕЛЬ",19,ACCENT)
 			_label(body,"Золото: заказы · Зелёный: детали · Оранжевый: помощь · Синий: ваш автопарк",14,MUTED)
-			var map=load("res://scripts/map_view.gd").new();body.add_child(map)
+			var map=load("res://scripts/map_view.gd").new();map.route=route;body.add_child(map)
 			map.chosen.connect(func(title:String,pos:Vector3):waypoint_name=title;waypoint_pos=pos;_close_tablet();_notify("Цель: "+title))
 		"cargo":
 			var v=s.vehicles[World.vehicle_near(s,p)]
@@ -423,13 +443,13 @@ func _open_tablet(page:String="jobs") -> void:
 		"help":
 			_label(body,"ПЕРВАЯ ДОСТАВКА",26,ACCENT)
 			_label(body,"1. Примите обычный заказ на вкладке «Контракты».\n2. Возьмите коробку у гаража: подойдите и нажмите E.\n3. У задней двери фургона: E открыть, F загрузить, G закрепить.\n4. Закройте багажник (E), подойдите сбоку и сядьте (E).\n5. Найдите адрес на карте (M), довезите груз. Пробел — тормоз.\n6. Остановитесь, выйдите (E), откройте багажник сзади.\n7. F — взять коробку; у жёлтой метки F — завершить доставку.\n8. Прибыль поступит компании. Улучшения покупаются в гараже.",18)
-			_label(body,"Кампания: вкладка «Бизнес». Карта: нажмите метку для навигации.\nДетали: зелёные ящики. Вызовы: «Город». Машины: «Автопарк».\nПКМ + мышь — поворот камеры. Колесо — расстояние.\nТяжёлый груз: E у друга, чтобы нести вдвоём; Q — поставить.\nВ одиночку доступна медленная тележка. R — возрождение.\nЗастряли или закончился бензин? Выйдите и вызовите эвакуатор: Esc.\nПауза и планшет не останавливают общую смену. Хост сохраняет мир F5.",16,MUTED)
+			_label(body,"Кампания: вкладка «Бизнес». Карта: нажмите метку для навигации.\nДетали: зелёные ящики. Вызовы: «Город». Машины: «Автопарк».\nМышь — вид от первого лица. В кабине ПКМ — осмотреться.\nZ / C — поворотники, X — аварийка. B — станция, N — следующий трек.\nТяжёлый груз: E у друга, чтобы нести вдвоём; Q — поставить.\nВ одиночку доступна медленная тележка. R — возрождение.\nЗастряли или закончился бензин? Выйдите и вызовите эвакуатор: Esc.\nПауза и планшет не останавливают общую смену. Хост сохраняет мир F5.",16,MUTED)
 
 func nearest() -> Dictionary:
 	if not Session.active:return {}
 	var s=Session.state();var p=s.players[Profile.player_id];var pos=World.vec(p.pos);var vid=World.vehicle_near(s,p);var v=s.vehicles[vid]
 	if not p.alive:return {"action":"respawn","id":"","label":"[R] ВОЗРОЖДЕНИЕ"}
-	if p.vehicle!="":return {"action":"vehicle","id":p.vehicle,"label":"[E] ВЫЙТИ · WASD РУЛЬ · ПРОБЕЛ ТОРМОЗ · [M] КАРТА" if v.driver==Profile.player_id else "ПАССАЖИР · [E] ВЫЙТИ · [M] КАРТА"}
+	if p.vehicle!="":return {"action":"vehicle","id":p.vehicle,"label":"[Z/C] ПОВОРОТНИКИ · [X] АВАРИЙКА · [E] ВЫЙТИ · WASD РУЛЬ · ПРОБЕЛ ТОРМОЗ · [M] КАРТА" if v.driver==Profile.player_id else "ПАССАЖИР · [E] ВЫЙТИ · [M] КАРТА"}
 	var carry=World.held(p,s)
 	for oid in s.orders:
 		var o=s.orders[oid]
@@ -497,6 +517,14 @@ func _unhandled_key_input(event:InputEvent) -> void:
 		KEY_R:_request("respawn")
 		KEY_H:
 			if p.vehicle!="":_request("horn")
+		KEY_Z:
+			if p.vehicle!="":_request("indicator","left")
+		KEY_C:
+			if p.vehicle!="":_request("indicator","right")
+		KEY_X:
+			if p.vehicle!="":_request("indicator","hazard")
+		KEY_B:audio.change_station();_notify(audio.now_playing())
+		KEY_N:audio.skip_track();_notify(audio.now_playing())
 		KEY_I:_open_tablet("cargo")
 		KEY_F5:
 			var err=Session.save_world()
@@ -504,20 +532,31 @@ func _unhandled_key_input(event:InputEvent) -> void:
 func _process(dt:float) -> void:
 	toast_timer-=dt
 	if is_instance_valid(toast):toast.visible=toast_timer>0
+	var captured=Session.active and not paused and not is_instance_valid(tablet)
+	view.capture_orbit=captured
+	var mode=Input.MOUSE_MODE_CAPTURED if captured else Input.MOUSE_MODE_VISIBLE
+	if Input.mouse_mode!=mode:Input.mouse_mode=mode
 	if not Session.active:return
-	move_timer+=dt;hud_timer+=dt
-	if move_timer>=1.0/30:
-		move_timer=0;var axis=Vector2.ZERO
-		var p=Session.state().players[Profile.player_id]
-		if not paused and not is_instance_valid(tablet):
-			axis=Vector2(float(Input.is_physical_key_pressed(KEY_D))-float(Input.is_physical_key_pressed(KEY_A)),float(Input.is_physical_key_pressed(KEY_S))-float(Input.is_physical_key_pressed(KEY_W))).limit_length()
-			if p.vehicle=="":axis=view.movement(axis)
-		var brake=Input.is_physical_key_pressed(KEY_SPACE) or paused or is_instance_valid(tablet)
-		if brake!=brake_sent:
-			brake_sent=brake
-			if p.vehicle!="" and Session.state().vehicles[p.vehicle].driver==Profile.player_id:Session.request("brake","on" if brake else "off")
-		Session.send_movement(axis)
-	if hud_timer>=0.1:hud_timer=0;_update_hud()
+	hud_timer+=dt
+	if hud_timer>=.1:hud_timer=0;_update_hud()
+func _physics_process(dt:float) -> void:
+	if not Session.active:return
+	move_timer+=dt
+	if move_timer<1.0/30:return
+	move_timer=0
+	var p=Session.state().players[Profile.player_id];var axis=Vector2.ZERO
+	if not paused and not is_instance_valid(tablet):
+		var right=Input.is_physical_key_pressed(KEY_D) or Input.is_physical_key_pressed(KEY_RIGHT)
+		var left=Input.is_physical_key_pressed(KEY_A) or Input.is_physical_key_pressed(KEY_LEFT)
+		var back=Input.is_physical_key_pressed(KEY_S) or Input.is_physical_key_pressed(KEY_DOWN)
+		var forward=Input.is_physical_key_pressed(KEY_W) or Input.is_physical_key_pressed(KEY_UP)
+		axis=Vector2(float(right)-float(left),float(back)-float(forward))
+		if p.vehicle=="":axis=view.movement(axis)
+	var brake=Input.is_physical_key_pressed(KEY_SPACE) or paused or is_instance_valid(tablet)
+	if brake!=brake_sent or brake_vehicle!=p.vehicle:
+		brake_sent=brake;brake_vehicle=p.vehicle
+		if p.vehicle!="" and Session.state().vehicles[p.vehicle].driver==Profile.player_id:Session.request("brake","on" if brake else "off")
+	Session.send_movement(axis,view.yaw,p.vehicle=="")
 func _update_hud() -> void:
 	if not is_instance_valid(hud) or not Session.active:return
 	var s=Session.state();var p=s.players[Profile.player_id];var v=s.vehicles[World.vehicle_near(s,p)];var shift=s.economy.shift;var company=s.economy.company
@@ -550,14 +589,31 @@ func _update_hud() -> void:
 				if item.holder=="" and item.container=="":direction_target=World.vec(item.pos);direction_title="Забрать груз"
 				break
 	if direction_title!="":
-		var delta=direction_target-World.vec(p.pos)
-		var angle=wrapf(atan2(delta.x,-delta.z)+view.yaw,-PI,PI)
-		var arrows=["↑","↗","→","↘","↓","↙","←","↖"]
-		navigation_label.text=World.Layout.district(World.vec(p.pos))+"\n"+arrows[posmod(roundi(angle/(PI/4)),8)]+"  "+direction_title+"  ·  %d м"%int(delta.length())
+		var origin=World.vec(p.pos);var delta=direction_target-origin
+		var bearing_delta=delta;var distance=delta.length();var instruction=""
+		if p.vehicle!="" and distance>12:
+			if route_origin.distance_to(origin)>10 or route_goal!=direction_target or route_closed!=s.economy.weather.road_closed:
+				route=Navigation.path(origin,direction_target,s.economy.weather.road_closed);route_origin=origin;route_goal=direction_target;route_closed=s.economy.weather.road_closed
+			while route.size()>2 and origin.distance_to(route[1])<5:route.remove_at(0)
+			if route.size()>1:
+				bearing_delta=route[1]-origin;distance=bearing_delta.length()
+				for i in range(1,route.size()-1):distance+=route[i].distance_to(route[i+1])
+				if route.size()>2:
+					var from=route[1]-origin;var to=route[2]-route[1]
+					var turn=Driving.bearing(to,atan2(from.x,from.z))
+					instruction=" · Через %d м %s"%[int(from.length()),"направо →" if turn>.35 else "налево ←" if turn<-.35 else "прямо ↑"]
+			else:instruction=" · Подъедьте к ближайшей улице"
+		var angle=Driving.bearing(bearing_delta,view.heading());var arrows=["↑","↗","→","↘","↓","↙","←","↖"]
+		navigation_label.text=World.Layout.district(origin)+"\n"+arrows[posmod(roundi(angle/(PI/4)),8)]+"  "+direction_title+"  ·  %d м"%int(distance)+instruction
 		if delta.length()<4 and waypoint_name!="":waypoint_name=""
 	else:navigation_label.text=World.Layout.district(World.vec(p.pos))+"\n[M] Выберите цель на карте"
+	radio_label.text=audio.now_playing()+"\n[B] Станция  ·  [N] Следующий трек"
+	indicators_label.text=""
+	if p.vehicle!="":
+		var indicator=v.get("indicator","off");var blink=fposmod(s.time,.9)<.45
+		indicators_label.text=("◀" if blink and indicator in ["left","hazard"] else "·")+"   %02d   "%roundi(absf(v.speed)*3.6)+("▶" if blink and indicator in ["right","hazard"] else "·")
 	var target=nearest()
-	prompt_label.text=target.get("label","[TAB] КОНТРАКТЫ  ·  [M] КАРТА  ·  [Q] ПОЛОЖИТЬ ГРУЗ" if carry!="" else "[TAB] КОНТРАКТЫ  ·  [M] КАРТА  ·  ПКМ ПОВОРОТ КАМЕРЫ")
+	prompt_label.text=target.get("label","[TAB] КОНТРАКТЫ  ·  [M] КАРТА  ·  [Q] ПОЛОЖИТЬ ГРУЗ" if carry!="" else "[TAB] КОНТРАКТЫ  ·  [M] КАРТА  ·  МЫШЬ ОБЗОР")
 	if not p.alive:prompt_label.text="[R] ВОЗРОДИТЬСЯ" if s.time>=p.dead_until else "ВОЗРОЖДЕНИЕ ЧЕРЕЗ %d"%ceili(p.dead_until-s.time)
 	if last_money>=0 and int(company.balance)>last_money:_notify("На счёт компании поступило $%d."%(int(company.balance)-last_money))
 	last_money=int(company.balance)

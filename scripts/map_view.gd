@@ -3,6 +3,7 @@ signal chosen(title: String, pos: Vector3)
 const Layout=preload("res://scripts/world_layout.gd")
 const World=preload("res://scripts/world_state.gd")
 var targets: Array=[]
+var route=PackedVector3Array()
 func _ready() -> void:
 	custom_minimum_size=Vector2(950,490)
 	mouse_filter=Control.MOUSE_FILTER_STOP
@@ -22,6 +23,7 @@ func _draw() -> void:
 	for r in Layout.PIERS:draw_rect(Rect2(point(Vector3(r.position.x,0,r.position.y)),r.size/(Layout.LIMIT*2)*size),Color("7a8583"))
 	for b in Layout.BUILDINGS:
 		var r:Rect2=b[1];draw_rect(Rect2(point(Vector3(r.position.x,0,r.position.y)),r.size/(Layout.LIMIT*2)*size),Color("91a3a1"))
+	for i in range(route.size()-1):draw_line(point(route[i]),point(route[i+1]),Color("f3bd77"),3,true)
 	for d in Layout.DISTRICTS:
 		var r:Rect2=d.rect;draw_string(ThemeDB.fallback_font,point(Vector3(r.position.x+4,0,r.position.y+9)),d.name,HORIZONTAL_ALIGNMENT_LEFT,290,12,Color("d4e0d6"))
 	marker("ГАРАЖ",Layout.GARAGE,Color("80dfc0"))

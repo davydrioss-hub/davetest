@@ -11,6 +11,10 @@ var fullscreen = false
 var volume = 0.7
 var music = 0.4
 var shadows = true
+var sensitivity = .0025
+var fov = 75.0
+var head_bob = false
+var radio_station = 0
 var storage_error = ""
 
 func _ready() -> void:
@@ -39,6 +43,10 @@ func _ready() -> void:
 		volume = clampf(float(cfg.get_value("audio", "volume", 0.7)),0,1)
 		music = clampf(float(cfg.get_value("audio", "music", 0.4)),0,1)
 		shadows = bool(cfg.get_value("display", "shadows", true))
+	sensitivity=clampf(float(cfg.get_value("controls","sensitivity",.0025)),.0008,.006)
+	fov=clampf(float(cfg.get_value("display","fov",75.0)),60,100)
+	head_bob=bool(cfg.get_value("display","head_bob",false))
+	radio_station=int(cfg.get_value("audio","station",0))
 	if DisplayServer.get_name() != "headless":
 		apply_display()
 
@@ -53,6 +61,10 @@ func save_profile() -> Error:
 	cfg.set_value("audio", "volume", volume)
 	cfg.set_value("audio", "music", music)
 	cfg.set_value("display", "shadows", shadows)
+	cfg.set_value("controls","sensitivity",sensitivity)
+	cfg.set_value("display","fov",fov)
+	cfg.set_value("display","head_bob",head_bob)
+	cfg.set_value("audio","station",radio_station)
 	return cfg.save(root.path_join("profile.cfg"))
 
 func remember(address: String) -> void:

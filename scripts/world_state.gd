@@ -2,6 +2,8 @@ class_name WorldState
 extends RefCounted
 ## Authoritative, deterministic game rules; no scene, UI, or client-side rewards.
 const Layout = preload("res://scripts/world_layout.gd")
+const Driving = preload("res://scripts/driving.gd")
+const Pedestrians = preload("res://scripts/pedestrian_routes.gd")
 const SPEED = 5.5
 const INTERACT_RANGE = 3.1
 const RESPAWN_DELAY = 3.0
@@ -31,6 +33,7 @@ var data: Dictionary = {}
 var events: Array = []
 var npc_clock = 0.0
 var slow_clock = 0.0
+var pedestrian_paths: Dictionary = {}
 
 static func vec(value: Array) -> Vector3:
 	return Vector3(float(value[0]),float(value[1]),float(value[2]))
@@ -99,7 +102,7 @@ func _expand_world() -> void:
 		var spec=FLEET[vid]
 		if not data.vehicles.has(vid):
 			data.vehicles[vid]={"pos":arr(spec.spawn),"yaw":0.0,"driver":"","passengers":[],"speed":0.0,"cargo":[],"capacity":spec.capacity,"door_open":false,"health":100.0,"fuel":100.0,"brake":false,"owned":false,"model":vid}
-		data.vehicles[vid].merge({"owned":vid=="van_01","model":vid},false)
+		data.vehicles[vid].merge({"owned":vid=="van_01","model":vid,"steer":0.0,"indicator":"off"},false)
 	for sid in STAFF:
 		if not data.employees.has(sid):data.employees[sid]={"hired":false,"name":STAFF[sid].name,"owner":""}
 	for i in range(PART_SPOTS.size()):
@@ -111,6 +114,16 @@ func _expand_world() -> void:
 	for i in range(10,26):
 		var nid="walker_%02d"%i
 		if not data.npcs.has(nid):data.npcs[nid]={"pos":[-174.0,0.0,-70.0],"phase":i*0.63,"yaw":0.0,"district":i%3}
+
+	pedestrian_paths.clear()
+	for i in range(data.npcs.size()):
+		var actor=data.npcs.values()[i];var points=Pedestrians.route(i%Pedestrians.LOOPS.size())
+		pedestrian_paths[data.npcs.keys()[i]]=points
+		if not actor.has("path_distance"):
+			actor.path_distance=fposmod(i*19.71,Pedestrians.length(points))
+			var pose=Pedestrians.sample(points,actor.path_distance)
+			actor.pos=arr(pose.position);actor.yaw=pose.yaw
+		actor.walk_speed=1.15+(i%4)*0.1;actor.speed=actor.walk_speed
 
 func _make_orders() -> void:
 	var day = int(data.economy.shift.day)
@@ -246,6 +259,9 @@ func command(id: String, action: String, target: String) -> String:
 		if action == "vehicle": return exit_vehicle(id)
 		if action == "brake" and van.driver == id:
 			patch("vehicles",vid,{"brake":target == "on"}); return ""
+		if action == "indicator" and van.driver == id:
+			if not target in ["left","right","hazard","off"]:return "Неизвестный режим поворотников."
+			patch("vehicles",vid,{"indicator":"off" if van.indicator==target else target});return ""
 		if action == "horn":
 			patch("vehicles",vid,{"horn_tick":data.tick}); return ""
 		if not action in ["accept_order","ping"]: return "Сначала выйдите из фургона."
@@ -506,7 +522,7 @@ func _crash(speed: float, vid: String="van_01") -> void:
 		var loss=damage*(0.15 if item.secured else 1.0)*(1.5 if item.kind=="fragile" else 1.0)
 		patch("items",iid,{"condition":maxf(10,item.condition-loss)})
 
-func advance(dt: float, inputs: Dictionary) -> void:
+func advance(dt: float, inputs: Dictionary, headings: Dictionary = {}) -> void:
 	data.tick += 1; data.time += dt
 	for vid in data.vehicles:
 		var v = data.vehicles[vid]
@@ -514,12 +530,12 @@ func advance(dt: float, inputs: Dictionary) -> void:
 			var axis: Vector2 = inputs.get(v.driver,Vector2.ZERO)
 			var top = float(vehicle_spec(v).top)*(1.18 if data.economy.company.engine else 1.0)*(0.55 if v.health<35 else 1.0)*(0.75 if data.economy.weather.rain else 1.0)
 			if v.fuel<=0 or v.health<=0 or v.door_open: top=0
-			v.speed = move_toward(float(v.speed),clampf(-axis.y*top,-6,top),dt*(24 if v.brake else 7)) if not v.brake else move_toward(float(v.speed),0,dt*24)
-			if absf(v.speed)>0.1: v.yaw += axis.x*dt*1.5*clampf(v.speed/4,-1,1)
-			var pos=vec(v.pos)+Vector3(sin(v.yaw),0,cos(v.yaw))*v.speed*dt
-			var longitudinal=Vector3(sin(v.yaw),0,cos(v.yaw))*maxf(0.6,(float(vehicle_spec(v).length)-float(vehicle_spec(v).width))/2.0)
-			if not vehicle_blocked(pos,vid) and not vehicle_blocked(pos+longitudinal,vid) and not vehicle_blocked(pos-longitudinal,vid): v.pos=arr(pos)
-			else: _crash(absf(v.speed),vid); v.speed=0.0
+			var old_yaw=float(v.yaw)
+			Driving.step(v,axis,top,float(vehicle_spec(v).length),dt)
+			var pos=vec(v.pos)+Driving.forward(v.yaw)*v.speed*dt
+			var longitudinal=Driving.forward(v.yaw)*maxf(0.6,(float(vehicle_spec(v).length)-float(vehicle_spec(v).width))/2.0)
+			if not vehicle_blocked(pos,vid) and not vehicle_blocked(pos+longitudinal,vid) and not vehicle_blocked(pos-longitudinal,vid):v.pos=arr(pos)
+			else:_crash(absf(v.speed),vid);v.speed=0.0;v.yaw=old_yaw
 			v.fuel=maxf(0,v.fuel-absf(v.speed)*dt*0.008)
 	for id in data.players:
 		var p=data.players[id]
@@ -540,37 +556,45 @@ func advance(dt: float, inputs: Dictionary) -> void:
 		if carry!="":
 			speed=4.1
 			if data.items[carry].kind=="heavy": speed=3.4 if data.items[carry].carriers.size()>1 else 1.7
-		var axis:Vector2=inputs.get(id,Vector2.ZERO)
+		var axis:Vector2=inputs.get(id,Vector2.ZERO).limit_length()
 		var pos=vec(p.pos)
 		var dx=Vector3(axis.x*speed*dt,0,0)
 		var dz=Vector3(0,0,axis.y*speed*dt)
 		if not blocked_walk(pos+dx): pos+=dx
 		if not blocked_walk(pos+dz): pos+=dz
 		p.pos=arr(pos)
-		if axis.length_squared()>0.01: p.yaw=atan2(axis.x,axis.y)
+		if headings.has(id):p.yaw=wrapf(float(headings[id]),-PI,PI)
+		elif axis.length_squared()>0.01:p.yaw=atan2(axis.x,axis.y)
 		if carry!="":
 			for helper in data.items[carry].carriers.slice(1):
 				var candidate=pos+Vector3(1.2,0,0).rotated(Vector3.UP,p.yaw)
 				data.players[helper].pos=arr(candidate if not blocked(candidate,0.4) else pos)
 				data.players[helper].yaw=p.yaw
-	# 5 Hz nearby pedestrians; distant actors get a cheaper update.
+	# Nearby pedestrians wait for obstacles; distant actors skip those scans.
 	npc_clock+=dt
 	if npc_clock>=0.2:
-		var elapsed=npc_clock; npc_clock=0.0
-		for i in range(data.npcs.size()):
-			var actor=data.npcs.values()[i]
-			actor.phase+=elapsed*0.09
-			var close=false
-			for p in data.players.values():
-				if p.connected and vec(p.pos).distance_to(vec(actor.pos))<30: close=true; break
-			if close or int(data.tick)%60<12:
-				var t=fposmod(actor.phase,4.0)
-				var corners=[Vector3(-51,0,6),Vector3(51,0,6),Vector3(51,0,33),Vector3(-51,0,33)]
-				if actor.has("district"):
-					var loops=[[Vector3(-174,0,-70),Vector3(-118,0,-70),Vector3(-118,0,32),Vector3(-174,0,32)],[Vector3(118,0,-70),Vector3(174,0,-70),Vector3(174,0,70),Vector3(118,0,70)],[Vector3(-50,0,80),Vector3(50,0,80),Vector3(50,0,110),Vector3(-50,0,110)]]
-					corners=loops[int(actor.district)]
-				var a=corners[int(t)]; var b=corners[(int(t)+1)%4]
-				actor.pos=arr(a.lerp(b,fposmod(t,1.0))); actor.yaw=atan2(b.x-a.x,b.z-a.z)
+		var elapsed=npc_clock;npc_clock=0.0
+		for nid in data.npcs:
+			var actor=data.npcs[nid];var points:PackedVector3Array=pedestrian_paths[nid]
+			var candidate=Pedestrians.sample(points,float(actor.path_distance)+elapsed*float(actor.walk_speed))
+			var close=false;var obstructed=false
+			for player in data.players.values():
+				if player.connected and vec(player.pos).distance_to(vec(actor.pos))<35:close=true;break
+			if close:
+				for v in data.vehicles.values():
+					var local=(candidate.position-vec(v.pos)).rotated(Vector3.UP,-float(v.yaw))
+					if absf(local.x)<float(vehicle_spec(v).width)/2+0.6 and absf(local.z)<float(vehicle_spec(v).length)/2+0.7:obstructed=true;break
+				for player in data.players.values():
+					if player.connected and player.vehicle=="" and vec(player.pos).distance_to(candidate.position)<0.8:obstructed=true;break
+				var direction=(candidate.position-vec(actor.pos)).normalized()
+				for other_id in data.npcs:
+					if other_id==nid:continue
+					var relative=vec(data.npcs[other_id].pos)-vec(actor.pos)
+					if relative.dot(direction)>.05 and vec(data.npcs[other_id].pos).distance_to(candidate.position)<.7:obstructed=true;break
+			actor.speed=0.0 if obstructed else actor.walk_speed
+			if not obstructed:
+				actor.path_distance=fposmod(float(actor.path_distance)+elapsed*float(actor.walk_speed),Pedestrians.length(points))
+				actor.pos=arr(candidate.position);actor.yaw=candidate.yaw
 		var patrol=data.police.patrol_01
 		patrol.phase+=elapsed*0.07
 		patrol.pos=[56.0,0.0,sin(patrol.phase)*31.0]; patrol.yaw=0.0 if cos(patrol.phase)>0 else PI

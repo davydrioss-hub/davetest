@@ -5,7 +5,7 @@ signal ended(reason: String)
 signal notice(message: String)
 signal state_changed
 
-const PROTOCOL = 3
+const PROTOCOL = 4
 const DEFAULT_PORT = 27020
 const MAX_PLAYERS = 8
 const World = preload("res://scripts/world_state.gd")
@@ -238,21 +238,21 @@ func _apply_action(peer: int, number: int, action: String, target: String) -> vo
 		else: _feedback.rpc_id(peer, err)
 	_flush_events()
 
-func send_movement(axis: Vector2) -> void:
+func send_movement(axis: Vector2, heading: float = 0.0, has_heading: bool = false) -> void:
 	if not active: return
 	sequence += 1
-	if is_host: _apply_input(1, sequence, axis)
-	else: _movement_input.rpc_id(1, sequence, axis)
+	if is_host: _apply_input(1, sequence, axis, heading, has_heading)
+	else: _movement_input.rpc_id(1, sequence, axis, heading, has_heading)
 
 @rpc("any_peer", "call_remote", "unreliable_ordered", 1)
-func _movement_input(number: int, axis: Vector2) -> void:
-	if is_host and active: _apply_input(multiplayer.get_remote_sender_id(), number, axis)
+func _movement_input(number: int, axis: Vector2, heading: float = 0.0, has_heading: bool = false) -> void:
+	if is_host and active: _apply_input(multiplayer.get_remote_sender_id(), number, axis, heading, has_heading)
 
-func _apply_input(peer: int, number: int, axis: Vector2) -> void:
+func _apply_input(peer: int, number: int, axis: Vector2, heading: float = 0.0, has_heading: bool = false) -> void:
 	if not peers.has(peer) or number <= int(last_input.get(peer, -1)) or number < 0: return
-	if not axis.is_finite() or axis.length_squared() > 1.01 or not _allow_rate(peer, "input", 90.0): return
+	if not axis.is_finite() or absf(axis.x)>1.001 or absf(axis.y)>1.001 or not is_finite(heading) or absf(heading)>PI+0.001 or not _allow_rate(peer, "input", 90.0): return
 	last_input[peer] = number
-	input_state[peers[peer]] = {"axis": axis.limit_length(), "expires": Time.get_ticks_msec() + 300}
+	input_state[peers[peer]] = {"axis": axis, "heading":heading, "has_heading":has_heading, "expires": Time.get_ticks_msec() + 300}
 
 func _allow_rate(peer: int, kind: String, per_second: float) -> bool:
 	var bucket_key = str(peer) + "/" + kind
@@ -304,10 +304,12 @@ func _physics_process(dt: float) -> void:
 		if Time.get_ticks_msec() > pending[peer].expires:
 			pending.erase(peer)
 			_reject(peer, "Connection timed out.")
-	var inputs = {}
+	var inputs = {};var headings = {}
 	for id in input_state:
-		if Time.get_ticks_msec() <= input_state[id].expires: inputs[id] = input_state[id].axis
-	model.advance(dt, inputs)
+		if Time.get_ticks_msec() <= input_state[id].expires:
+			inputs[id] = input_state[id].axis
+			if input_state[id].has_heading:headings[id]=input_state[id].heading
+	model.advance(dt, inputs, headings)
 	_flush_events()
 	motion_timer += dt
 	npc_timer += dt
@@ -320,14 +322,14 @@ func _physics_process(dt: float) -> void:
 			if p.connected: poses.players[id] = [p.pos, p.yaw]
 		for id in model.data.vehicles:
 			var v = model.data.vehicles[id]
-			if not v.driver.is_empty() or absf(v.speed) > 0.01: poses.vehicles[id] = [v.pos, v.yaw, v.speed]
+			if not v.driver.is_empty() or absf(v.speed) > 0.01: poses.vehicles[id] = [v.pos, v.yaw, v.speed, v.steer]
 		for peer in peers:
 			if peer != 1: _motion.rpc_id(peer, model.data.world_id, int(model.data.tick), model.data.time, poses)
 	if npc_timer >= 0.2:
 		npc_timer = 0.0
 		var poses = {"npcs": {}, "police": {}}
 		for domain in poses:
-			for id in model.data[domain]: poses[domain][id] = [model.data[domain][id].pos, model.data[domain][id].get("yaw",0.0)]
+			for id in model.data[domain]: poses[domain][id] = [model.data[domain][id].pos, model.data[domain][id].get("yaw",0.0),model.data[domain][id].get("speed",0.0)]
 		for peer in peers:
 			if peer != 1: _actors.rpc_id(peer, model.data.world_id, int(model.data.tick), poses)
 	if save_timer >= 30.0:
@@ -354,7 +356,8 @@ func _apply_poses(tick: int, poses: Dictionary) -> void:
 			pose_ticks[key] = tick
 			replica[domain][id].pos = poses[domain][id][0]
 			replica[domain][id].yaw = poses[domain][id][1]
-			if domain == "vehicles" and poses[domain][id].size()>2: replica[domain][id].speed = poses[domain][id][2]
+			if poses[domain][id].size()>2:replica[domain][id].speed = poses[domain][id][2]
+			if domain=="vehicles" and poses[domain][id].size()>3:replica[domain][id].steer=poses[domain][id][3]
 
 func _peer_disconnected(peer: int) -> void:
 	pending.erase(peer)

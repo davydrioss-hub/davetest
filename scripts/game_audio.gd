@@ -10,7 +10,15 @@ var step_clock=0.0
 var last_position=Vector3.ZERO
 var last_balance=-1
 var last_horn=-1
+const STATIONS=[
+	{"name":"NIGHT DRIVE 98.4","tracks":["night_routes","neon_boulevard","last_tram","city_after_rain"]},
+	{"name":"HARBOR FM 104.2","tracks":["harbor_lights","tidal_station","blue_hour","pine_gardens"]},
+	{"name":"WORKSHOP RADIO 89.7","tracks":["late_factory","freight_line","warehouse_sessions","home_before_dawn"]}]
+var station=0
+var track_index=0
 var track="night_routes"
+var indicator:AudioStreamPlayer
+var last_blink=-1
 var next_track="night_routes"
 var music_fade=1.0
 var track_clock=0.0
@@ -23,6 +31,7 @@ func tone(kind:String,seconds:float,loop:bool=false) -> AudioStreamWAV:
 			"engine":sample=(sin(TAU*55*t)*0.48+sin(TAU*110*t)*0.18+sin(TAU*165*t)*0.08+rng.randf_range(-0.04,0.04))
 			"ambience":sample=(sin(TAU*110*t)+sin(TAU*164.8138*t)+sin(TAU*220*t)+sin(TAU*261.6256*t))*0.12*sin(PI*t/seconds)*sin(PI*t/seconds)
 			"rain":sample=rng.randf_range(-0.22,0.22)
+			"indicator":sample=sin(TAU*1900*t)*exp(-t*120)*.2
 			"foot":sample=rng.randf_range(-0.8,0.8)*exp(-t*48)+sin(TAU*90*t)*exp(-t*30)*0.3
 			"chime":sample=sin(TAU*(660 if t<0.14 else 880)*t)*exp(-fposmod(t,0.14)*22)*0.3*(1-t/seconds)
 			"horn":sample=(sin(TAU*330*t)+sin(TAU*440*t))*0.2*minf(1,t*60)*minf(1,(seconds-t)*60)
@@ -35,7 +44,9 @@ func player(kind:String,seconds:float,loop:bool=false) -> AudioStreamPlayer:
 	var p=AudioStreamPlayer.new();p.stream=tone(kind,seconds,loop);add_child(p);return p
 func _ready() -> void:
 	engine=player("engine",1,true);engine.volume_db=-40;engine.play()
-	ambience=AudioStreamPlayer.new();add_child(ambience);_play_track(track);ambience.volume_db=-24
+	ambience=AudioStreamPlayer.new();add_child(ambience);station=posmod(Profile.radio_station,STATIONS.size());track=STATIONS[station].tracks[0];next_track=track;_play_track(track);ambience.volume_db=-24
+	ambience.finished.connect(skip_track)
+	indicator=player("indicator",.045);indicator.volume_db=-24
 	rain=player("rain",2,true);rain.volume_db=-60;rain.play()
 	foot=player("foot",0.12);foot.volume_db=-22
 	chime=player("chime",0.35);chime.volume_db=-14
@@ -50,10 +61,11 @@ func _process(dt:float) -> void:
 	ambience.volume_db=linear_to_db(maxf(0.0001,Profile.music*0.65*music_fade))
 	if not Session.active:engine.volume_db=-60;rain.volume_db=-60;last_balance=-1;return
 	var s=Session.state();var p=s.players[Profile.player_id];var v=s.vehicles[WorldState.vehicle_near(s,p)]
-	if track_clock>8:
-		var district=WorldLayout.district(WorldState.vec(p.pos))
-		next_track="harbor_lights" if district=="ВОСТОЧНЫЙ ПОРТ" else "late_factory" if district=="ПРОМЫШЛЕННАЯ ЗОНА" else "pine_gardens" if district in ["СОСНОВЫЙ КВАРТАЛ","СЕВЕРНЫЙ ПАРК"] else "night_routes"
-	engine.pitch_scale=0.72+absf(v.speed)*0.075
+	var gear=clampi(int(absf(v.speed)/5),0,4)
+	engine.pitch_scale=.75+fposmod(absf(v.speed),5)*.085+gear*.035
+	var blink=int(s.time/.45)
+	if p.vehicle!="" and v.get("indicator","off")!="" and v.get("indicator","off")!="off" and blink!=last_blink:indicator.play()
+	last_blink=blink
 	var near=clampf(1-WorldState.vec(p.pos).distance_to(WorldState.vec(v.pos))/23,0,1)
 	engine.volume_db=linear_to_db(maxf(0.0001,near*(0.07 if v.driver!="" else 0.0)))
 	rain.volume_db=-26 if s.economy.weather.rain else -60
@@ -69,4 +81,12 @@ func _process(dt:float) -> void:
 func _play_track(name: String) -> void:
 	track=name
 	var music=load("res://assets/audio/"+name+".ogg") as AudioStreamOggVorbis
-	music.loop=true;ambience.stream=music;ambience.play()
+	music.loop=false;ambience.stream=music;ambience.play()
+
+func change_station() -> void:
+	station=(station+1)%STATIONS.size();track_index=0;Profile.radio_station=station;Profile.save_profile()
+	next_track=STATIONS[station].tracks[track_index]
+func skip_track() -> void:
+	track_index=(track_index+1)%STATIONS[station].tracks.size();next_track=STATIONS[station].tracks[track_index]
+func now_playing() -> String:
+	return STATIONS[station].name+" / "+str(next_track).replace("_"," ").capitalize()

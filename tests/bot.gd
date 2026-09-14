@@ -1,6 +1,8 @@
 extends Node
 ## Test-only filesystem driver. Excluded from every export preset.
 var direction = Vector2.ZERO
+var look_heading=0.0
+var has_look=false
 var tick_timer = 0.0
 var dump_timer = 0.0
 var command_id = -1
@@ -25,7 +27,7 @@ func _process(dt: float) -> void:
 	dump_timer += dt
 	if tick_timer >= 1.0 / 30.0:
 		tick_timer = 0
-		Session.send_movement(direction)
+		Session.send_movement(direction,look_heading,has_look)
 	if dump_timer < 0.1: return
 	dump_timer = 0
 	var command_path = Profile.root.path_join("command.json")
@@ -33,6 +35,7 @@ func _process(dt: float) -> void:
 		var cmd = JSON.parse_string(FileAccess.get_file_as_string(command_path))
 		if cmd is Dictionary and int(cmd.get("id", -1)) > command_id:
 			command_id = int(cmd.id)
+			if cmd.has("heading"):look_heading=float(cmd.heading);has_look=true
 			if cmd.has("move"): direction = Vector2(cmd.move[0], cmd.move[1])
 			if cmd.has("teleport") and Session.is_host:
 				for id in cmd.teleport: Session.model.patch("players", id, {"pos": cmd.teleport[id]})

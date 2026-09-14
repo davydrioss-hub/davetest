@@ -35,6 +35,8 @@ class RemoteZip(io.RawIOBase):
 
 def prepare(godot=None, template=None):
     prepare_assets()
+    from compose_radio import prepare as prepare_radio
+    prepare_radio()
     CACHE.mkdir(exist_ok=True)
     if godot:
         executable = pathlib.Path(shutil.which(godot) or godot).resolve()

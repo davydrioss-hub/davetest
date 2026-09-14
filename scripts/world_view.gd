@@ -26,6 +26,7 @@ var pbr_cache: Dictionary = {}
 var activity_nodes: Dictionary = {}
 var staff_nodes: Dictionary = {}
 var capture_orbit = true
+var surface_cache:Dictionary = {}
 var first_person_frame = true
 
 func _ready() -> void:
@@ -39,7 +40,9 @@ func _ready() -> void:
 	Session.entered.connect(func(): first_person_frame=true)
 
 func material(color: Color, glow: float = 0.0, metal: float = 0.0) -> StandardMaterial3D:
-	var m = StandardMaterial3D.new(); m.albedo_color=color; m.roughness=0.75; m.metallic=metal
+	var key=str(color)+str(glow)+str(metal)
+	if surface_cache.has(key):return surface_cache[key]
+	var m = StandardMaterial3D.new();surface_cache[key]=m; m.albedo_color=color; m.roughness=0.75; m.metallic=metal
 	if glow>0:
 		m.emission_enabled=true; m.emission=color; m.emission_energy_multiplier=glow
 	return m
@@ -64,7 +67,7 @@ func box(parent: Node3D, size: Vector3, pos: Vector3, color: Color, glow: float 
 	m.mesh=mesh; m.material_override=material(color,glow); m.position=pos; parent.add_child(m)
 	return m
 func cylinder(parent: Node3D, radius: float, height: float, pos: Vector3, color: Color, glow: float=0.0) -> MeshInstance3D:
-	var m=MeshInstance3D.new(); var mesh=CylinderMesh.new(); mesh.top_radius=radius;mesh.bottom_radius=radius;mesh.height=height;mesh.radial_segments=12
+	var m=MeshInstance3D.new(); var mesh=CylinderMesh.new(); mesh.top_radius=radius;mesh.bottom_radius=radius;mesh.height=height;mesh.radial_segments=24
 	m.mesh=mesh;m.material_override=material(color,glow);m.position=pos;parent.add_child(m)
 	return m
 func label3(parent: Node3D, title: String, pos: Vector3, size: int, color: Color, billboard: bool=false) -> Label3D:
@@ -82,6 +85,7 @@ func bounds(n: Node3D, transform: Transform3D = Transform3D.IDENTITY) -> AABB:
 			if next.size!=Vector3.ZERO: result=next if result.size==Vector3.ZERO else result.merge(next)
 	return result
 func asset(parent: Node3D, pack: String, file: String, pos: Vector3, size: Vector3=Vector3.ZERO) -> Node3D:
+	if pack=="city-kit-suburban" and file.begins_with("tree-"):return _tree_detail(parent,pos,size.y,int(pos.x*7+pos.z*13))
 	var path="res://assets/"+pack+"/"+file
 	if not scene_cache.has(path): scene_cache[path]=load(path)
 	var n=scene_cache[path].instantiate()
@@ -101,17 +105,17 @@ func _build_city() -> void:
 	environment=Environment.new();environment.background_mode=Environment.BG_SKY
 	var sky=Sky.new();var sky_mat=ShaderMaterial.new();var sky_shader=Shader.new()
 	# Use the unobstructed upper sky of the panorama; exclude photographed foreground buildings.
-	sky_shader.code="shader_type sky; uniform sampler2D clouds:source_color,filter_linear; void sky(){vec2 uv=vec2(SKY_COORDS.x,clamp(SKY_COORDS.y*.56,.025,.28));vec3 c=texture(clouds,uv).rgb;COLOR=mix(vec3(.08,.13,.20),c*.4,.85);}"
+	sky_shader.code="shader_type sky; uniform sampler2D clouds:source_color,filter_linear; void sky(){vec2 uv=vec2(SKY_COORDS.x,clamp(SKY_COORDS.y*.56,.025,.28));vec3 c=texture(clouds,uv).rgb;float h=pow(clamp(SKY_COORDS.y*2.,0.,1.),3.);COLOR=mix(mix(vec3(.08,.16,.30),vec3(.55,.32,.20),h),c*.35,.25);}"
 	sky_mat.shader=sky_shader;sky_mat.set_shader_parameter("clouds",load("res://assets/hd/twilight_sunset.hdr"))
 	sky.sky_material=sky_mat;sky.radiance_size=Sky.RADIANCE_SIZE_256;environment.sky=sky
 	environment.ambient_light_source=Environment.AMBIENT_SOURCE_COLOR;environment.ambient_light_color=Color("adbed1");environment.ambient_light_energy=0.42
-	environment.background_energy_multiplier=0.45
+	environment.background_energy_multiplier=1.0
 	environment.reflected_light_source=Environment.REFLECTION_SOURCE_SKY
 	environment.tonemap_mode=Environment.TONE_MAPPER_FILMIC;environment.tonemap_exposure=0.9
 	environment.fog_enabled=true;environment.fog_light_color=Color("637882");environment.fog_density=0.0013;environment.fog_sky_affect=0.45
 	var env=WorldEnvironment.new();env.environment=environment;add_child(env)
 	sun=DirectionalLight3D.new();sun.rotation_degrees=Vector3(-28,-45,0);sun.light_color=Color("dfc4b4");sun.light_energy=0.32;sun.shadow_enabled=Profile.shadows;sun.directional_shadow_max_distance=90;sun.directional_shadow_mode=DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS;add_child(sun)
-	get_viewport().msaa_3d=Viewport.MSAA_2X if Profile.shadows else Viewport.MSAA_DISABLED
+	get_viewport().msaa_3d=Viewport.MSAA_4X if Profile.shadows else Viewport.MSAA_DISABLED
 	box(self,Vector3(650,0.5,560),Vector3(-105,-0.5,0),Color("344d42"))
 	var ground=detailed(self,Vector3(394,0.15,302),Vector3(-14,-0.06,0),"asphalt_02",0.18)
 	asphalt=ground.material_override
@@ -142,27 +146,22 @@ func _build_city() -> void:
 				var mat=mesh.get_active_material(0).duplicate();mat.albedo_color=palette[absi(int(center.x+center.y))%5];mesh.material_override=mat
 		# Real material detail on the plinth; original model windows and roof remain intact.
 		for side in [-1.0,1.0]:
-			detailed(self,Vector3(rect.size.x,2.8,0.12),Vector3(center.x,1.5,center.y+side*rect.size.y/2),"brick_wall_003",0.22)
-			detailed(self,Vector3(0.12,2.8,rect.size.y),Vector3(center.x+side*rect.size.x/2,1.5,center.y),"brick_wall_003",0.22)
+			detailed(self,Vector3(rect.size.x,h-.4,.12),Vector3(center.x,h/2,center.y+side*rect.size.y/2),"brick_wall_003",0.22)
+			detailed(self,Vector3(.12,h-.4,rect.size.y),Vector3(center.x+side*rect.size.x/2,h/2,center.y),"brick_wall_003",0.22)
 		detailed(self,Vector3(rect.size.x+3,0.09,rect.size.y+3),Vector3(center.x,0.08,center.y),"brick_pavement",0.2)
 		# Additional illuminated storefront at the visible entrance.
 		var front=rect.end.y+0.12 if center.y<0 else rect.position.y-0.12
 		var facing=0.0 if center.y<0 else PI
 		var sign=Node3D.new();add_child(sign);sign.position=Vector3(center.x,0,front);sign.rotation.y=facing
-		box(sign,Vector3(rect.size.x*0.72,0.82,0.16),Vector3(0,3.0,0),Color("174e57"))
-		label3(sign,building[3],Vector3(0,3.0,0.11),38,GOLD)
-		for wx in [-3.8,-1.9,1.9,3.8]:
-			box(sign,Vector3(1.55,1.65,0.07),Vector3(wx,1.6,0.13),Color("d4a971"),0.8)
-		box(sign,Vector3(1.3,2.35,0.12),Vector3(0,1.3,0.14),Color("2b4f59"))
-		for row in range(1,int(h/3)):
-			for column in range(-2,3):
-				var lit=posmod(column+row+int(center.x),3)!=0
-				box(sign,Vector3(1.25,1.55,0.06),Vector3(column*2.55,3.0+row*2.6,0.15),Color("e9bc80") if lit else Color("344d5d"),0.45 if lit else 0.0)
+		_front_detail(sign,rect,h,absi(int(center.x+center.y)))
+		var title=label3(sign,building[3],Vector3(0,3,.32),30,GOLD);title.pixel_size=minf(.006,rect.size.x*.75/maxi(1,building[3].length())/26)
 		light(self,Vector3(center.x,3.3,front+(2 if center.y<0 else -2)),GOLD,1.4,10)
-	# Skyline is decorative, outside the playable map.
+	var horizon=Node3D.new();add_child(horizon);horizon.set_meta("keep_static",true)
 	for i in range(18):
-		var angle=i*TAU/18;var pos=Vector3(sin(angle)*330,0,cos(angle)*290)
-		var tower=asset(self,"city-kit-commercial","building-skyscraper-a.glb",pos,Vector3(12,24+i%5*8,12));cull(tower,540)
+		var angle=i*TAU/18;var pos=Vector3(sin(angle)*310,0,cos(angle)*260);var height=22+i%5*9
+		box(horizon,Vector3(15,height,15),pos+Vector3.UP*height/2,Color("667580"))
+		box(horizon,Vector3(11,2,11),pos+Vector3.UP*(height+1),Color("526574"))
+	cull(horizon,540)
 	_build_garage()
 	_build_districts()
 	for x in [-51.0,5.0,51.0]:
@@ -199,12 +198,14 @@ func _build_city() -> void:
 	var screen=ColorRect.new();screen.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT);screen.mouse_filter=Control.MOUSE_FILTER_IGNORE;grade.add_child(screen)
 	var grading=Shader.new();grading.code="shader_type canvas_item; uniform sampler2D screen_tex:hint_screen_texture,filter_linear; void fragment(){vec2 uv=SCREEN_UV;vec3 c=texture(screen_tex,uv).rgb; float l=dot(c,vec3(.2126,.7152,.0722)); c=mix(vec3(l),c,1.1); c=mix(c,c*vec3(.90,1.01,1.07),.3*(1.-l)); float v=1.-.2*smoothstep(.18,.72,distance(uv,vec2(.5)));COLOR=vec4(c*v,1.);}"
 	var gm=ShaderMaterial.new();gm.shader=grading;screen.material=gm
+	_bake_static()
 
 func _build_garage() -> void:
 	detailed(self,Vector3(26,0.12,22),Vector3(-37.5,0.18,20),"concrete_floor_worn_02",0.22)
 	for wall in Layout.GARAGE_WALLS:
 		detailed(self,Vector3(wall.size.x,4.8,wall.size.y),Vector3(wall.get_center().x,2.4,wall.get_center().y),"brick_wall_003",0.22)
-	# Open front and high clerestory keep the playable interior visible to the camera.
+	detailed(self,Vector3(25.5,.25,11),Vector3(-37.5,4.95,14.5),"concrete_floor_worn_02",.25)
+	for x in [-48.0,-42.0,-36.0,-30.0]:box(self,Vector3(.18,.3,11),Vector3(x,4.65,14.5),Color("344349"))
 	box(self,Vector3(25.5,0.3,2.5),Vector3(-37.5,4.8,10),Color("253b48"))
 	box(self,Vector3(25.5,0.6,0.5),Vector3(-37.5,4.6,20),Color("234a53"))
 	label3(self,"AFTER HOURS  /  COURIER COMPANY",Vector3(-37.5,4.65,20.3),65,GOLD)
@@ -236,6 +237,18 @@ func _build_animations() -> void:
 		var player=n.find_child("AnimationPlayer",true,false)
 		var a=player.get_animation("Root|"+file.capitalize()).duplicate()
 		a.loop_mode=Animation.LOOP_LINEAR;animation_library.add_animation(file,a);n.free()
+	var source=animation_library.get_animation("run");var idle=animation_library.get_animation("idle")
+	var walk=source.duplicate();walk.length=1.05
+	for track in range(walk.get_track_count()):
+		var path=walk.track_get_path(track);var base=idle.find_track(path,walk.track_get_type(track))
+		for key in range(walk.track_get_key_count(track)):
+			walk.track_set_key_time(track,key,source.track_get_key_time(track,key)*1.05/source.length)
+			if base<0:continue
+			var neutral=idle.track_get_key_value(base,0);var value=source.track_get_key_value(track,key)
+			var amount=.48 if "Leg" in str(path) or "Foot" in str(path) or "Toe" in str(path) else .3
+			if value is Quaternion:walk.track_set_key_value(track,key,neutral.slerp(value,amount))
+			elif value is Vector3:walk.track_set_key_value(track,key,neutral.lerp(value,.18))
+	animation_library.add_animation("walk",walk)
 func _character(parent: Node3D, variant: int) -> Node3D:
 	var character=asset(parent,"characters","characterMedium.fbx",Vector3.ZERO)
 	character.scale=Vector3.ONE*0.49
@@ -321,14 +334,18 @@ func _process(dt: float) -> void:
 					target_yaw=v.yaw;target=World.vec(v.pos)+Vector3(-0.48+(idx%2)*0.96,0.95+floori(idx/6.0)*0.5,(-1.8+(idx%6/2)*0.75)*float(spec.length)/5.4).rotated(Vector3.UP,target_yaw)
 					# Roof is faded out while accessing the cargo through its open doors.
 					n.visible=n.visible and v.door_open
-			var speed=n.position.distance_to(target)/maxf(dt,0.001)
+			var previous:Vector3=n.position
 			if n.position.distance_to(target)>8: n.position=target
 			else: n.position=n.position.lerp(target,1-exp(-16*dt))
 			n.rotation.y=lerp_angle(n.rotation.y,target_yaw,1-exp(-14*dt))
 			if n.has_meta("animation"):
-				var anim:AnimationPlayer=n.get_meta("animation");var wanted="run" if speed>0.45 else "idle"
+				var measured=n.position.distance_to(previous)/maxf(dt,.001)
+				var speed=lerpf(float(n.get_meta("speed",0.0)),measured,1-exp(-6*dt))
+				if domain=="npcs":speed=float(record.get("speed",1.25))
+				n.set_meta("speed",speed)
+				var anim:AnimationPlayer=n.get_meta("animation");var wanted=("run" if speed>3 else "walk") if speed>.15 else "idle"
 				if anim.current_animation!=wanted: anim.play(wanted,0.16)
-				anim.speed_scale=clampf(speed/4,0.45,1.35) if wanted=="run" else 1.0
+				anim.speed_scale=clampf(speed/(4.4 if wanted=="run" else 1.35),.55,1.6) if wanted!="idle" else 1.0
 			if domain=="vehicles":
 				for side in [-1,1]:
 					var door=n.get_child(0).get_node("RearLeft" if side<0 else "RearRight")
@@ -482,3 +499,62 @@ func _update_activities(s: Dictionary) -> void:
 		if n.get_child_count()==0:
 			_character(n,2 if sid=="mechanic" else 0);label3(n,World.STAFF[sid].name,Vector3(0,2.5,0),25,Color("9bf4cf"),true)
 		n.visible=s.employees[sid].hired
+
+func _window_detail(parent:Node3D,x:float,y:float,width:float,height:float,warm:bool,shop:bool=false) -> void:
+	var n=Node3D.new();parent.add_child(n);n.position=Vector3(x,y,.24)
+	var trim=Color("293940")
+	box(n,Vector3(width+.18,height+.18,.15),Vector3.ZERO,trim)
+	box(n,Vector3(width,height,.025),Vector3(0,0,.09),Color("746044") if warm else Color("294251"),.12 if warm else 0)
+	if shop:
+		for shelf in [-.45,.2]:
+			box(n,Vector3(width*.9,.04,.15),Vector3(0,shelf,.17),Color("927154"))
+			for item in range(4):box(n,Vector3(width*.13,.23,.07),Vector3((item-1.5)*width*.21,shelf+.14,.20),[Color("c6aa70"),Color("718d85"),Color("ae6e50"),Color("bdb2a3")][item])
+	box(n,Vector3(.045,height,.03),Vector3(0,0,.30),trim)
+	box(n,Vector3(width,.04,.03),Vector3(0,height*.18,.30),trim)
+	box(n,Vector3(width+.28,.1,.4),Vector3(0,-height/2-.1,.08),Color("a1a09a"))
+func _front_detail(sign:Node3D,rect:Rect2,height:float,seed:int) -> void:
+	var width=rect.size.x
+	for x in [-width*.35,-width*.18,width*.18,width*.35]:_window_detail(sign,x,1.52,minf(2,width*.13),1.6,true,true)
+	box(sign,Vector3(1.4,2.55,.22),Vector3(0,1.35,.15),Color("afb4ae"))
+	box(sign,Vector3(1.15,2.35,.08),Vector3(0,1.28,.29),Color("243d48"))
+	box(sign,Vector3(.055,.34,.055),Vector3(-.38,1.18,.36),Color("d1c19e"))
+	box(sign,Vector3(width*.8,.52,.28),Vector3(0,3,.13),Color("183c45"))
+	box(sign,Vector3(width*.85,.12,1.25),Vector3(0,2.63,.65),Color("416867")).rotation.x=-.09
+	var columns=maxi(2,floori(width/2.8))
+	for row in range(1,int(height/3)):
+		for column in range(columns):_window_detail(sign,(column-(columns-1)*.5)*2.65,3+row*2.55,1.2,1.45,posmod(column+row+seed,4)==0)
+	for y in [3.7,height-.15]:box(sign,Vector3(width+.12,.17,.28),Vector3(0,y,.12),Color("9e9c92"))
+	cylinder(sign,.065,height-.8,Vector3(width*.47,(height-.8)/2,.28),Color("566467"))
+	box(sign,Vector3(.5,.55,.2),Vector3(-width*.45,1.65,.27),Color("78817b"))
+	box(sign,Vector3(1.05,.58,.38),Vector3(width*.34,3.85,.38),Color("a2a7a0"))
+	for i in range(6):box(sign,Vector3(.65,.027,.02),Vector3(width*.34,3.65+i*.07,.58),Color("566164"))
+func _tree_detail(parent:Node3D,pos:Vector3,height:float,seed:int) -> Node3D:
+	var n=Node3D.new();parent.add_child(n);n.position=pos
+	cylinder(n,height*.035,height*.65,Vector3(0,height*.325,0),Color("594c3d"))
+	var rng=RandomNumberGenerator.new();rng.seed=seed
+	var mm=MultiMesh.new();mm.transform_format=MultiMesh.TRANSFORM_3D;mm.use_colors=true
+	var mesh=SphereMesh.new();mesh.radial_segments=10;mesh.rings=5;mesh.radius=1;mesh.height=2
+	var leaf=material(Color("597544")).duplicate();leaf.vertex_color_use_as_albedo=true;mesh.material=leaf;mm.mesh=mesh;mm.instance_count=65
+	for i in range(mm.instance_count):
+		var a=rng.randf()*TAU;var r=height*.25*sqrt(rng.randf());var radius=height*rng.randf_range(.06,.11)
+		var center=Vector3(sin(a)*r,height*.71+rng.randf_range(-.1,.12)*height,cos(a)*r)
+		mm.set_instance_transform(i,Transform3D(Basis.IDENTITY.scaled(Vector3(radius,radius*.8,radius)),center));mm.set_instance_color(i,Color.WHITE.darkened(rng.randf_range(0,.3)))
+	var leaves=MultiMeshInstance3D.new();leaves.multimesh=mm;n.add_child(leaves);cull(n,180);return n
+func _bake_static() -> void:
+	var groups={};var removed:Array[Node]=[]
+	_gather_static(self,groups,removed)
+	for key in groups:
+		var g=groups[key];var n=MeshInstance3D.new();n.mesh=g.surface.commit();n.material_override=g.material;n.position=g.origin;add_child(n)
+	for n in removed:n.queue_free()
+func _gather_static(parent:Node,groups:Dictionary,removed:Array[Node]) -> void:
+	for n in parent.get_children():
+		if n in [gate,roadworks,garage_extension,rain] or n in markers.values() or n in activity_nodes.values() or n in staff_nodes.values() or n.has_meta("keep_static"):continue
+		if n is MeshInstance3D and n.mesh is PrimitiveMesh and not n.material_override is ShaderMaterial:
+			var mat=n.get_active_material(0)
+			if mat is StandardMaterial3D and mat.transparency!=BaseMaterial3D.TRANSPARENCY_DISABLED:continue
+			var tile=Vector2i(floori(n.global_position.x/32),floori(n.global_position.z/32));var key=str(tile)+str(mat.get_instance_id())
+			if not groups.has(key):
+				var st=SurfaceTool.new();st.begin(Mesh.PRIMITIVE_TRIANGLES);groups[key]={"surface":st,"material":mat,"origin":Vector3(tile.x*32,0,tile.y*32)}
+			var transform=n.global_transform;transform.origin-=groups[key].origin
+			groups[key].surface.append_from(n.mesh,0,transform);removed.append(n)
+		else:_gather_static(n,groups,removed)

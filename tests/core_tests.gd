@@ -16,6 +16,8 @@ func pickup(w:WorldState,o:Dictionary) -> void:
 	at(w,"a",World.vec(w.data.items[o.item].pos));check(w.command("a","pickup",o.item).is_empty(),"Pick up "+o.kind)
 func deliver(w:WorldState,oid:String) -> void:
 	at(w,"a",World.vec(World.destination(w.data.orders[oid]).pos));check(w.command("a","complete_order",oid).is_empty(),"Deliver at validated destination")
+func setup() -> WorldState:
+	var model=World.new();model.create_world();model.join_player("a","Alice");model.join_player("b","Bob");return model
 func _ready() -> void:call_deferred("run")
 func run() -> void:
 	var w=World.new();w.create_world();w.join_player("a","Alice");w.join_player("b","Bob")
@@ -192,5 +194,62 @@ func run() -> void:
 	var expanded=World.new();expanded.load_world(old2.data)
 	check(expanded.data.world_id==old2.data.world_id and expanded.data.economy.company.balance==1234 and expanded.data.orders.d001_01.status=="active" and expanded.data.items.has("cargo_d001_01"),"V0.2 migration preserves ID, company budget, accepted job and parcel")
 	check(expanded.data.vehicles.size()==3 and expanded.data.activities.size()==15 and Saves.valid_world(expanded.data),"Migration adds fleet and activities as a valid current world")
+	var driving=preload("res://scripts/driving.gd")
+	for heading in [0.0,PI/2,PI,-PI/2]:
+		var forward=driving.forward(heading);var right=forward.cross(Vector3.UP)
+		var foot_axis=driving.walk_axis(Vector2(0,-1),heading)
+		check(Vector3(foot_axis.x,0,foot_axis.y).dot(forward)>.99,"First-person forward follows camera")
+		var strafe=driving.walk_axis(Vector2(1,0),heading)
+		check(Vector3(strafe.x,0,strafe.y).dot(right)>.99,"Strafe right follows camera")
+		var drive_case={"speed":5.0,"yaw":heading,"brake":false,"steer":0.0}
+		for i in range(30):driving.step(drive_case,Vector2(1,-1),16,5.4,1.0/60)
+		check(driving.forward(drive_case.yaw).dot(right)>.1,"Right steering turns toward driver's right")
+		drive_case={"speed":-3.0,"yaw":heading,"brake":false,"steer":0.0}
+		for i in range(30):driving.step(drive_case,Vector2(1,1),16,5.4,1.0/60)
+		check(driving.forward(drive_case.yaw).dot(right)<-.05,"Reverse steering has inverse yaw")
+	var stopping={"speed":16.0,"yaw":0.0,"brake":true,"steer":0.0}
+	for i in range(60):driving.step(stopping,Vector2(1,-1),16,5.4,1.0/60)
+	check(is_zero_approx(stopping.speed),"Brake overrides accelerator")
+	var reverse={"speed":10.0,"yaw":0.0,"brake":false,"steer":0.0}
+	driving.step(reverse,Vector2(0,1),16,5.4,.1)
+	check(reverse.speed>0 and reverse.speed<10,"Reverse input brakes before changing direction")
+	for i in range(240):driving.step(reverse,Vector2(0,1),0,5.4,1.0/60)
+	check(is_zero_approx(reverse.speed),"Empty fuel blocks reverse and forward")
+	var gaze=setup();var gaze_start=World.vec(gaze.data.players.a.pos)
+	gaze.advance(.1,{"a":Vector2(0,1)},{"a":PI})
+	check(is_equal_approx(absf(gaze.data.players.a.yaw),PI) and World.vec(gaze.data.players.a.pos).z>gaze_start.z,"Backpedalling preserves gaze")
+	var pedestrians=preload("res://scripts/pedestrian_routes.gd")
+	for loop in range(pedestrians.LOOPS.size()):
+		var points=pedestrians.route(loop);var span=pedestrians.length(points);var walkable=true;var smooth=true
+		for meter in range(ceili(span*2)):
+			var pose=pedestrians.sample(points,meter*.5)
+			walkable=walkable and not World.Layout.blocked(pose.position,.35)
+			var next=pedestrians.sample(points,meter*.5+.27)
+			smooth=smooth and pose.position.distance_to(next.position)<=.271
+		check(walkable,"Pedestrian loop avoids buildings and water")
+		check(smooth,"Constant walking distance around corners and wrap")
+	var walkers=setup();var starts={}
+	for id in walkers.data.npcs:starts[id]=World.vec(walkers.data.npcs[id].pos)
+	walkers.advance(.2,{})
+	var max_step=0.0
+	for id in starts:max_step=maxf(max_step,starts[id].distance_to(World.vec(walkers.data.npcs[id].pos)))
+	check(max_step<=.291,"Pedestrians spawn on route and walk below 1.5 metres per second")
+	var parked=walkers.data.vehicles.van_01
+	parked.pos=walkers.data.npcs.walker_00.pos.duplicate()
+	var blocked_npc=walkers.data.npcs.walker_00.pos.duplicate()
+	walkers.data.players.a.pos=parked.pos.duplicate();walkers.advance(.2,{})
+	check(walkers.data.npcs.walker_00.pos==blocked_npc and walkers.data.npcs.walker_00.speed==0,"Pedestrian waits for parked car")
+	var signals=setup();at(signals,"a",World.vec(signals.data.vehicles.van_01.pos)+Vector3(3,0,0));signals.command("a","vehicle","van_01")
+	at(signals,"b",World.vec(signals.data.vehicles.van_01.pos)+Vector3(3,0,0));signals.command("b","vehicle","van_01")
+	check(signals.command("a","indicator","left")=="" and signals.data.vehicles.van_01.indicator=="left","Driver controls server-owned signal")
+	check(signals.command("b","indicator","right")!="" and signals.data.vehicles.van_01.indicator=="left","Passenger cannot override signal")
+	signals.command("a","indicator","left")
+	check(signals.data.vehicles.van_01.indicator=="off","Repeated signal command cancels it")
+	var nav=preload("res://scripts/navigation.gd")
+	var route=nav.path(Vector3(0,0,0),Vector3(56,0,0),true)
+	var safe_route=route.size()>2
+	for i in range(route.size()-1):safe_route=safe_route and nav.clear(route[i],route[i+1],true)
+	check(safe_route,"GPS finds detour around closed road")
+	check(driving.bearing(Vector3.LEFT,0)>1.5 and driving.bearing(Vector3.RIGHT,0)<-1.5,"HUD bearing matches driver space")
 	print("CORE TESTS: %d passed / %d total"%[checks-failures.size(),checks])
 	get_tree().quit(0 if failures.is_empty() else 1)

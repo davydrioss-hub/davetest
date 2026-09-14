@@ -86,7 +86,8 @@ try:
     start=player(host,a.id)['pos'][0]
     a.command(move=[1,0])
     wait(lambda:player(host,a.id)['pos'][0]>start+1,'Movement intent changes server position')
-    a.command(move=[0,0])
+    a.command(move=[0,0],heading=1.4)
+    wait(lambda:abs(player(b,a.id)['yaw']-1.4)<.02,'Standing first-person gaze reaches another client')
     wait(lambda:abs(player(b,a.id)['pos'][0]-player(host,a.id)['pos'][0])<.3,'Movement replicates to another client')
     a.action('accept_order','d001_01')
     wait(lambda:world(host)['orders']['d001_01']['status']=='active','Client accepts authoritative contract')
@@ -245,11 +246,17 @@ try:
     wait(lambda:abs(player(empty_client)['pos'][0]+149)<.1,'Courier reaches purchased car')
     empty_client.action('vehicle','courier_02')
     wait(lambda:player(city_late,empty_client.id)['vehicle']=='courier_02','Second vehicle boarding replicates')
+    empty_client.action('indicator','right')
+    wait(lambda:world(city_late)['vehicles']['courier_02']['indicator']=='right','Turn signal replicates to observer')
+    city_late.action('indicator','left')
+    wait(lambda:world(empty_host)['vehicles']['courier_02']['indicator']=='right','Bystander cannot change signal')
     old_van=world(empty_host)['vehicles']['van_01']['pos'][:]
     start=world(empty_host)['vehicles']['courier_02']['pos'][2]
     empty_client.command(move=[0,-1])
     wait(lambda:world(city_late)['vehicles']['courier_02']['pos'][2]>start+1,'Second vehicle movement reaches observer')
     empty_client.command(move=[0,0])
+    empty_client.action('brake','on')
+    wait(lambda:abs(world(city_late)['vehicles']['courier_02']['speed'])<.05,'Braking reaches observer')
     assert world(empty_host)['vehicles']['van_01']['pos']==old_van
     CHECKS.append('Separate vehicle authority leaves first van still');print('PASS Separate vehicle authority leaves first van still',flush=True)
     empty_host.command(save=True)

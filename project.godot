@@ -5,7 +5,7 @@ config_version=5
 config/name="After Hours"
 run/main_scene="res://main.tscn"
 config/features=PackedStringArray("4.4", "GL Compatibility")
-config/description="After Hours: City Expansion. Five districts, three vehicles and a shared courier company."
+config/description="After Hours: Night Drive. Five districts, three vehicles and a shared courier company."
 
 [autoload]
 Profile="*res://scripts/profile.gd"
@@ -20,6 +20,8 @@ window/stretch/mode="canvas_items"
 
 [rendering]
 renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.windows="forward_plus"
+rendering_device/fallback_to_opengl3=true
 renderer/rendering_method.mobile="gl_compatibility"
 environment/defaults/default_clear_color=Color(0.035, 0.05, 0.065, 1)
 textures/default_filters/use_nearest_mipmap_filter=false
