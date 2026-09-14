@@ -10,7 +10,11 @@ func shot(main:Node,title:String) -> void:
 	var directory=OS.get_environment("AFTER_HOURS_PREVIEW_DIR")
 	if not directory.is_empty():
 		DirAccess.make_dir_recursive_absolute(directory)
-		get_viewport().get_texture().get_image().save_png(directory.path_join(title+".png"))
+		var frame=get_viewport().get_texture().get_image()
+		frame.save_png(directory.path_join(title+".png"))
+		if title in ["fps-cab","pedestrian-walk","fps-street"]:
+			frame.resize(960,600)
+			print("RENDER_PREVIEW "+title+" "+Marshalls.raw_to_base64(frame.save_jpg_to_buffer(.68)))
 	require(main.view.camera.position.is_finite(),"Finite camera transform")
 func _ready() -> void:
 	Profile.nickname="Render test"
